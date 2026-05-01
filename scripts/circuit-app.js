@@ -37,6 +37,8 @@ export class CircuitApp {
 			const voltageColorCheck = document.getElementById("voltageColor");
 			const potentialGraphCheck = document.getElementById("potentialGraph");
 			const invertVoltageAxisCheck = document.getElementById("invertVoltageAxis");
+			const debugModeCheck = document.getElementById("debugMode");
+			const debugControlsGroup = document.getElementById("debugControlsGroup");
 			const debugLabelsCheck = document.getElementById("debugLabels");
 			const debugJunctionIdsCheck = document.getElementById("debugJunctionIds");
 			const debugNodePotentialsCheck = document.getElementById("debugNodePotentials");
@@ -86,6 +88,7 @@ export class CircuitApp {
 				voltageColorMode: false,
 				potentialGraphMode: false,
 				invertVoltageAxis: true,
+				debugMode: false,
 				debugLabels: false,
 				debugJunctionIds: false,
 				debugNodePotentials: false,
@@ -216,6 +219,22 @@ export class CircuitApp {
 			function getCellEmf(id) {
 				const v = state.cellEmfById[id];
 				return Number.isFinite(v) ? v : 6;
+			}
+
+			function setDebugControlsVisible(enabled) {
+				state.debugMode = !!enabled;
+				if (debugControlsGroup) {
+					debugControlsGroup.hidden = !enabled;
+				}
+				if (enabled) return;
+				if (debugLabelsCheck) debugLabelsCheck.checked = false;
+				if (debugJunctionIdsCheck) debugJunctionIdsCheck.checked = false;
+				if (debugNodePotentialsCheck) debugNodePotentialsCheck.checked = false;
+				if (wireResLabelsCheck) wireResLabelsCheck.checked = false;
+				state.debugLabels = false;
+				state.debugJunctionIds = false;
+				state.debugNodePotentials = false;
+				state.wireResistanceLabels = false;
 			}
 
 			function getCellPolarity(id) {
@@ -6524,30 +6543,32 @@ export class CircuitApp {
 
 					const boxH = pad * 2 + lineH * 2 + rowsPerCol * lineH;
 					const y = Math.max(8, canvasH - boxH - 10);
-					ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
-					ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
-					ctx.lineWidth = 1.3;
-					ctx.beginPath();
-					ctx.roundRect(x, y, boxW, boxH, 6);
-					ctx.fill();
-					ctx.stroke();
+					if (state.debugMode) {
+						ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
+						ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
+						ctx.lineWidth = 1.3;
+						ctx.beginPath();
+						ctx.roundRect(x, y, boxW, boxH, 6);
+						ctx.fill();
+						ctx.stroke();
 
-					ctx.fillStyle = "#14354f";
-					ctx.textAlign = "left";
-					ctx.textBaseline = "top";
-					ctx.fillText(header, x + pad, y + pad);
-					let colX = x + pad;
-					for (let c = 0; c < colCount; c++) {
-						ctx.fillText(colHeader, colX, y + pad + lineH);
-						const start = c * rowsPerCol;
-						const end = Math.min(start + rowsPerCol, bodyLines.length);
-						for (let i = start; i < end; i++) {
-							const localRow = i - start;
-							ctx.fillStyle = sectionRowColors[i] || "#14354f";
-							ctx.fillText(bodyLines[i], colX, y + pad + lineH * (2 + localRow));
-						}
 						ctx.fillStyle = "#14354f";
-						colX += colWidths[c] + colGap;
+						ctx.textAlign = "left";
+						ctx.textBaseline = "top";
+						ctx.fillText(header, x + pad, y + pad);
+						let colX = x + pad;
+						for (let c = 0; c < colCount; c++) {
+							ctx.fillText(colHeader, colX, y + pad + lineH);
+							const start = c * rowsPerCol;
+							const end = Math.min(start + rowsPerCol, bodyLines.length);
+							for (let i = start; i < end; i++) {
+								const localRow = i - start;
+								ctx.fillStyle = sectionRowColors[i] || "#14354f";
+								ctx.fillText(bodyLines[i], colX, y + pad + lineH * (2 + localRow));
+							}
+							ctx.fillStyle = "#14354f";
+							colX += colWidths[c] + colGap;
+						}
 					}
 
 					const junctionX = canFitSideBySide
@@ -6557,19 +6578,21 @@ export class CircuitApp {
 						? Math.max(8, canvasH - junctionBoxH - 10)
 						: Math.max(8, y - junctionBoxH - 8);
 
-					ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
-					ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
-					ctx.lineWidth = 1.3;
-					ctx.beginPath();
-					ctx.roundRect(junctionX, junctionY, junctionBoxW, junctionBoxH, 6);
-					ctx.fill();
-					ctx.stroke();
-					ctx.fillStyle = "#14354f";
-					ctx.fillText(junctionHeader, junctionX + junctionPad, junctionY + junctionPad);
-					ctx.fillText(junctionColHeader, junctionX + junctionPad, junctionY + junctionPad + lineH);
-					for (let i = 0; i < junctionRowsVisible; i++) {
+					if (state.debugMode) {
+						ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
+						ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
+						ctx.lineWidth = 1.3;
+						ctx.beginPath();
+						ctx.roundRect(junctionX, junctionY, junctionBoxW, junctionBoxH, 6);
+						ctx.fill();
+						ctx.stroke();
 						ctx.fillStyle = "#14354f";
-						ctx.fillText(junctionBodyLines[i] || "", junctionX + junctionPad, junctionY + junctionPad + lineH * (2 + i));
+						ctx.fillText(junctionHeader, junctionX + junctionPad, junctionY + junctionPad);
+						ctx.fillText(junctionColHeader, junctionX + junctionPad, junctionY + junctionPad + lineH);
+						for (let i = 0; i < junctionRowsVisible; i++) {
+							ctx.fillStyle = "#14354f";
+							ctx.fillText(junctionBodyLines[i] || "", junctionX + junctionPad, junctionY + junctionPad + lineH * (2 + i));
+						}
 					}
 
 					const sectionRTotal = sectionRows.reduce((sum, row) => {
@@ -6599,22 +6622,24 @@ export class CircuitApp {
 					const resistanceBoxW = resistanceTextW + resistancePad * 2;
 					const resistanceRowsVisible = Math.max(1, resistanceCheckBody.length);
 					const resistanceBoxH = resistancePad * 2 + lineH * (2 + resistanceRowsVisible);
-					const resistanceX = junctionX;
-					const resistanceY = canFitSideBySide
-						? Math.max(8, junctionY - resistanceBoxH - 8)
-						: Math.min(canvasH - resistanceBoxH - 8, junctionY + junctionBoxH + 8);
-					ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
-					ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
-					ctx.lineWidth = 1.3;
-					ctx.beginPath();
-					ctx.roundRect(resistanceX, resistanceY, resistanceBoxW, resistanceBoxH, 6);
-					ctx.fill();
-					ctx.stroke();
-					ctx.fillStyle = "#14354f";
-					ctx.fillText(resistanceCheckHeader, resistanceX + resistancePad, resistanceY + resistancePad);
-					ctx.fillText(resistanceCheckColHeader, resistanceX + resistancePad, resistanceY + resistancePad + lineH);
-					for (let i = 0; i < resistanceRowsVisible; i++) {
-						ctx.fillText(resistanceCheckBody[i] || "", resistanceX + resistancePad, resistanceY + resistancePad + lineH * (2 + i));
+					if (state.debugMode) {
+						const resistanceX = junctionX;
+						const resistanceY = canFitSideBySide
+							? Math.max(8, junctionY - resistanceBoxH - 8)
+							: Math.min(canvasH - resistanceBoxH - 8, junctionY + junctionBoxH + 8);
+						ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
+						ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
+						ctx.lineWidth = 1.3;
+						ctx.beginPath();
+						ctx.roundRect(resistanceX, resistanceY, resistanceBoxW, resistanceBoxH, 6);
+						ctx.fill();
+						ctx.stroke();
+						ctx.fillStyle = "#14354f";
+						ctx.fillText(resistanceCheckHeader, resistanceX + resistancePad, resistanceY + resistancePad);
+						ctx.fillText(resistanceCheckColHeader, resistanceX + resistancePad, resistanceY + resistancePad + lineH);
+						for (let i = 0; i < resistanceRowsVisible; i++) {
+							ctx.fillText(resistanceCheckBody[i] || "", resistanceX + resistancePad, resistanceY + resistancePad + lineH * (2 + i));
+						}
 					}
 
 					state.wireLabelNodePotentialByKey = null;
@@ -6623,7 +6648,8 @@ export class CircuitApp {
 						? state.wireLabelValueBySegmentIndex
 						: {};
 					const hasWireLabelCache = Object.keys(wireLabelCache).length > 0;
-					if (hasWireLabelCache || wireResistanceLabelsEnabled()) {
+					const shouldBuildNodePotentialCache = hasWireLabelCache || wireResistanceLabelsEnabled() || state.potentialGraphMode;
+					if (shouldBuildNodePotentialCache) {
 					const wireLabelSegments = routeGraph && Array.isArray(routeGraph.segments)
 						? routeGraph.segments
 						: buildCircuitVoltageSegments(layout);
@@ -6913,12 +6939,38 @@ export class CircuitApp {
 					};
 
 					const nodePotentialById = solveNodePotentials();
+					const nodeIds = Array.from(nodeConnectionMap.keys()).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+					const anchorNodeId = nodeIds.includes("N1") ? "N1" : (nodeIds[0] || null);
+					const anchorConnected = new Set();
+					if (anchorNodeId) {
+						const stack = [anchorNodeId];
+						anchorConnected.add(anchorNodeId);
+						while (stack.length) {
+							const cur = stack.pop();
+							const neighbors = nodeConnectionMap.get(cur) || [];
+							for (const n of neighbors) {
+								if (anchorConnected.has(n)) continue;
+								anchorConnected.add(n);
+								stack.push(n);
+							}
+						}
+					}
 					const nodePotentialByKey = {};
 					for (const node of nodesOrdered) {
 						if (!node || !node.key) continue;
 						const nodeId = nodeIdByKey.get(node.key);
 						if (!nodeId) continue;
-						const potential = nodePotentialById.get(nodeId);
+						let potential = nodePotentialById.get(nodeId);
+						const isDisconnectedFromAnchor = anchorNodeId && !anchorConnected.has(nodeId);
+						const sampledPotential = isDisconnectedFromAnchor
+							&& potentialSampler
+							&& typeof potentialSampler.potentialAt === "function"
+							? potentialSampler.potentialAt(node.x, node.y)
+							: null;
+						if (isDisconnectedFromAnchor && Number.isFinite(sampledPotential)) {
+							potential = sampledPotential;
+							nodePotentialById.set(nodeId, potential);
+						}
 						if (!Number.isFinite(potential)) continue;
 						nodePotentialByKey[node.key] = potential;
 					}
@@ -7050,14 +7102,14 @@ export class CircuitApp {
 				const rect = canvasWrap.getBoundingClientRect();
 				const pixelWidth = Math.max(1, Math.floor(rect.width * dpr));
 				const pixelHeight = Math.max(1, Math.floor(rect.height * dpr));
-				const cssWidth = rect.width + "px";
-				const cssHeight = rect.height + "px";
+				const cssWidth = pixelWidth / dpr + "px";
+				const cssHeight = pixelHeight / dpr + "px";
 
+				// Only treat true pixel-size changes as resizes.
+				// Minor sub-pixel jitter from getBoundingClientRect() should not re-auto-fit the graph.
 				if (!boundsChanged
 					&& canvas.width === pixelWidth
-					&& canvas.height === pixelHeight
-					&& canvas.style.width === cssWidth
-					&& canvas.style.height === cssHeight) {
+					&& canvas.height === pixelHeight) {
 					return;
 				}
 
@@ -7843,6 +7895,12 @@ export class CircuitApp {
 						resetGraphZoomToFit();
 					});
 
+					if (debugModeCheck) {
+						debugModeCheck.addEventListener("input", () => {
+							setDebugControlsVisible(debugModeCheck.checked);
+						});
+					}
+
 					debugLabelsCheck.addEventListener("input", () => {
 						state.debugLabels = debugLabelsCheck.checked;
 					});
@@ -7872,6 +7930,7 @@ export class CircuitApp {
 
 			const inputController = new InputController();
 			inputController.install();
+			setDebugControlsVisible(!!(debugModeCheck && debugModeCheck.checked));
 
 			function setSideMenuOpen(open) {
 				sideMenu.classList.toggle("hidden", !open);
