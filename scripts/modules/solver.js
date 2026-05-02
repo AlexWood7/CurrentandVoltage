@@ -7,7 +7,6 @@ componentBodyHeight,
 computeLayout,
 canvas,
 isExtraCell,
-getCellRInternal,
 isBranchSwitch,
 isComponentSwitchClosed,
 closedSwitchWireResistance,
@@ -99,15 +98,6 @@ const state = circuitState;
 					return { vMin, vMax };
 				}
 
-				solveBranchCurrent(numerator, branchModel) {
-					const EPS_R = 1e-9;
-					const EPS_V = 1e-6;
-					const R = (branchModel && Number.isFinite(branchModel.R)) ? branchModel.R : 0;
-					if (R > EPS_R) return numerator / R;
-					if (Math.abs(numerator) <= EPS_V) return 0;
-					return numerator > 0 ? Infinity : -Infinity;
-				}
-
 				solveStageBranchCurrents(stage, stageEq, Vstage, targetStageCurrent) {
 					const EPS_R = 1e-9;
 					const EPS_V = 1e-6;
@@ -127,39 +117,6 @@ const state = circuitState;
 							sumResolvedFinite += I;
 							continue;
 						}
-
-							if (row && row.name === "mainSwitch") {
-								const rowR = Number.isFinite(row.R) ? Math.max(0, row.R) : 0;
-								const rowI = Number.isFinite(row.I) ? row.I : 0;
-								let adjR = rowR;
-								let toLabel = nodeLabel("N0") || "J?";
-								if (stages.length > 0 && Array.isArray(stages[0].branches) && stages[0].branches.length > 1) {
-									const y0 = stageEntryTop(0);
-									if (y0 !== null) {
-										let minX = Infinity;
-										for (const b of stages[0].branches) {
-											if (Number.isFinite(b.x)) minX = Math.min(minX, b.x);
-										}
-										if (Number.isFinite(minX)) {
-											toLabel = registry.labelAt(minX, y0) || toLabel;
-											adjR = Math.max(0, rowR - Math.max(0, layout.xRight - minX) * SHORT_WIRE_R_PER_PIXEL);
-										}
-									}
-								}
-								out.push({
-									...row,
-									name: "mainSwitch_visiblePath",
-									fromDisplayLabel: registry.labelAt(layout.xCell, layout.yTop) || "J?",
-									toDisplayLabel: toLabel,
-									R: adjR,
-									E: 0,
-									dV: Number.isFinite(row.dV) ? row.dV : (rowI * adjR),
-									// Cover the entire top bus (xCell -> topBusRightX) so visibleResistanceForRow
-									// picks up all top-bus wire segments including the rightmost split-bus extension.
-									segmentGeometry: { x1: layout.xCell, y1: layout.yTop, x2: layout.topBusRightX, y2: layout.yTop }
-								});
-								continue;
-							}
 						if (Math.abs(numerator) > EPS_V) {
 							const Iinf = numerator > 0 ? Infinity : -Infinity;
 							branchCurrents[branchIndex] = Iinf;
@@ -240,7 +197,11 @@ const state = circuitState;
 					const topV = Number.isFinite(sol.Vtop) ? sol.Vtop : fallbackTopV;
 					const bottomV = Number.isFinite(sol.Vbottom) ? sol.Vbottom : fallbackBottomV;
 					const current = Number.isFinite(sol.I) ? sol.I : 0;
-					const rInternal = this.state.internalR ? getCellRInternal(primaryLeftCellId) : 0;
+					// Use solved component resistance so internal-cell resistor split follows
+					// the exact same signed I*R convention as every other resistor.
+					const rInternal = this.state.internalR
+						? (Number.isFinite(sol.R) ? Math.max(0, sol.R) : Math.max(0, componentResistance(primaryLeftCellId)))
+						: 0;
 					return {
 						cellTopPlateV: topV + current * rInternal,
 						cellBottomPlateV: bottomV
@@ -653,7 +614,7 @@ const state = circuitState;
 						Vext: leftRunV,
 						switchVLeft: 0,
 						switchVRight,
-						bottomRightV: nodeV.B,
+						bottomRightV: runV,
 						cellTopPlateV,
 						cellBottomPlateV,
 						vMin,
@@ -661,7 +622,7 @@ const state = circuitState;
 					};
 				}
 
-				buildZeroResistanceSolution(netEmf, stageEquivalents) {
+				buildZeroResistanceSolution(netEmf) {
 					const layout = this.getSolveLayout();
 					if (!this.isSimpleSeriesLayout(layout) || this.state.internalR) {
 						return this.fallbackZeroResistanceSolution(netEmf);
@@ -841,11 +802,10 @@ const state = circuitState;
 					return x;
 				}
 
-				solveWithKirchhoffMatrix() {
+				solveWithKirchhoffMatrix(includeWireR = true) {
 					const stageCount = this.state.stages.length;
 					const EPS_R = 1e-9;
 					const EPS_V = 1e-6;
-					const includeWireR = true;
 					const elements = [];
 					const hasLeftSeriesComponents = (this.state.leftSeries || []).length > 0;
 					const commonLoopWireR = includeWireR ? this.estimateCommonLoopWireResistance(stageCount) : 0;
@@ -1070,7 +1030,6 @@ const state = circuitState;
 								continue;
 							}
 
-							let vNow = stageTopV;
 							this.writeBranchReadings(byId, branch, Ibranch, stageTopV);
 						}
 					}
@@ -1093,7 +1052,6 @@ const state = circuitState;
 								const voltage_per_component = branch.length > 0 ? junctionVoltage / branch.length : 0;
 								for (const id of branch) {
 									const R = componentResistance(id);
-									const E = componentEmf(id);
 									// With zero current: Vdrop = 0*R - E, but voltage across is determined by junctions
 									// Distribute junction voltage evenly across components
 									const topV = vNow;
@@ -1167,8 +1125,8 @@ const state = circuitState;
 					const totalWireR = this.estimateCommonLoopWireResistance(stageCount)
 						+ this.estimateMainSwitchPathWireResistance()
 						+ stageConnectorTotal;
-					const iWith = Number.isFinite(withWire.Itotal) ? withWire.Itotal : withWire.Itotal;
-					const iWithout = Number.isFinite(withoutWire.Itotal) ? withoutWire.Itotal : withoutWire.Itotal;
+					const iWith = withWire.Itotal;
+					const iWithout = withoutWire.Itotal;
 					const deltaI = (Number.isFinite(iWith) && Number.isFinite(iWithout)) ? (iWith - iWithout) : NaN;
 
 					return {
@@ -1197,7 +1155,7 @@ const state = circuitState;
 						const stageEquivalents = this.state.stages.map((stage) => this.stageEquivalent(stage));
 						const leftModel = this.branchModel(this.state.leftSeries || []);
 						const netEmf = stageEquivalents.reduce((sum, stageEq) => sum + stageEq.Eeq, 0) - leftModel.E;
-						fallbackSolved = this.buildZeroResistanceSolution(netEmf, stageEquivalents);
+						fallbackSolved = this.buildZeroResistanceSolution(netEmf);
 						}
 
 

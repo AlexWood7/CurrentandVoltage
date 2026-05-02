@@ -31,6 +31,7 @@ export function createKirchhoffSolver(deps) {
 			const allSegs = buildCircuitVoltageSegments(layout);
 			const loopParts = [];
 			let totalR = 0;
+			let totalE = 0;
 			const seenComp = new Set();
 			for (const seg of allSegs) {
 				if (!seg) continue;
@@ -51,6 +52,13 @@ export function createKirchhoffSolver(deps) {
 						? componentIntrinsicResistance(componentId)
 						: componentResistance(componentId);
 					totalR += Math.max(0, componentR);
+					const riseEmf = Number.isFinite(componentEmf(componentId)) ? (-componentEmf(componentId)) : 0;
+					if (Math.abs(riseEmf) > 1e-12) {
+						const segTraversalSign = Math.abs(seg.y2 - seg.y1) >= Math.abs(seg.x2 - seg.x1)
+							? (seg.y2 >= seg.y1 ? 1 : -1)
+							: (seg.x2 >= seg.x1 ? 1 : -1);
+						totalE += riseEmf * segTraversalSign;
+					}
 					continue;
 				}
 				if (seg.componentId && seg.role === "switch-blade" && isComponentSwitchClosed(seg.componentId)) {
@@ -103,7 +111,7 @@ export function createKirchhoffSolver(deps) {
 				from: "J1",
 				to: "J1",
 				R: loopR,
-				E: loopI * loopR,
+				E: totalE,
 				parts: loopParts,
 				routeKey: "J1|J1",
 				routeIndex: 0,

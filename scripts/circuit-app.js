@@ -64,7 +64,7 @@ export class CircuitApp {
 			const GRAPH_XY_SCALE_BASE = 1;
 			const GRAPH_VERTICAL_MARGIN = 36;
 			const GRAPH_AUTO_FIT_SCALE = 0.92;
-			const GRAPH_MIN_AUTO_ZOOM = 1;
+			const GRAPH_MIN_AUTO_ZOOM = 0.35;
 			const GRAPH_CIRCUIT_MARGIN = 40;
 			const GRAPH_SIDE_MARGIN = 12;
 			const GRAPH_PATH_HALF_WIDTH = 18;
@@ -1035,6 +1035,86 @@ export class CircuitApp {
 
 			function resetGraphZoomToFit() {
 				return graphViewportController.resetGraphZoomToFit();
+			}
+
+			function computeCircuitViewBounds(layout) {
+				if (!layout) return null;
+				let minX = Number.isFinite(layout.xCell) ? layout.xCell : 0;
+				let maxX = Number.isFinite(layout.circuitRight) ? layout.circuitRight : (Number.isFinite(layout.w) ? layout.w : minX + 1);
+				let minY = Number.isFinite(layout.yTop) ? layout.yTop : 0;
+				let maxY = Number.isFinite(layout.yBottom) ? layout.yBottom : (Number.isFinite(layout.h) ? layout.h : minY + 1);
+
+				if (layout.switchHit) {
+					if (Number.isFinite(layout.switchHit.left)) minX = Math.min(minX, layout.switchHit.left);
+					if (Number.isFinite(layout.switchHit.right)) maxX = Math.max(maxX, layout.switchHit.right);
+					if (Number.isFinite(layout.switchHit.top)) minY = Math.min(minY, layout.switchHit.top);
+					if (Number.isFinite(layout.switchHit.bottom)) maxY = Math.max(maxY, layout.switchHit.bottom);
+				}
+
+				for (const rect of (layout.rects || [])) {
+					if (!rect) continue;
+					if (Number.isFinite(rect.left)) minX = Math.min(minX, rect.left);
+					if (Number.isFinite(rect.right)) maxX = Math.max(maxX, rect.right);
+					if (Number.isFinite(rect.top)) minY = Math.min(minY, rect.top);
+					if (Number.isFinite(rect.bottom)) maxY = Math.max(maxY, rect.bottom);
+				}
+
+				for (const item of (layout.leftSeriesItems || [])) {
+					if (!item) continue;
+					if (Number.isFinite(item.left)) minX = Math.min(minX, item.left);
+					if (Number.isFinite(item.right)) maxX = Math.max(maxX, item.right);
+					if (Number.isFinite(item.top)) minY = Math.min(minY, item.top);
+					if (Number.isFinite(item.bottom)) maxY = Math.max(maxY, item.bottom);
+				}
+
+				if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+					return null;
+				}
+
+				return { minX, maxX, minY, maxY };
+			}
+
+			function autoFitCircuitViewToCanvas() {
+				rebuildLayout();
+				if (!state.layout) return;
+				const bounds = computeCircuitViewBounds(state.layout);
+				if (!bounds) return;
+				const rect = canvasWrap.getBoundingClientRect();
+				if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width < 8 || rect.height < 8) return;
+
+				const paddingX = 24;
+				const paddingTop = 98;
+				const paddingBottom = 88;
+				const spanX = Math.max(1e-6, bounds.maxX - bounds.minX);
+				const spanY = Math.max(1e-6, bounds.maxY - bounds.minY);
+				const fitX = Math.max(1e-6, (rect.width - paddingX * 2) / spanX);
+				const fitY = Math.max(1e-6, (rect.height - paddingTop - paddingBottom) / spanY);
+				const fitZoom = clamp(Math.min(fitX, fitY) * 0.98, 0.25, 4.0);
+				const defaultViewZoom = 1;
+
+				// Auto behavior rules:
+				// 1) Zoom out when circuit does not fit current zoom.
+				// 2) If currently zoomed out below default and space allows, zoom back to default only.
+				let targetZoom = state.viewZoom;
+				if (fitZoom < state.viewZoom) {
+					targetZoom = fitZoom;
+				} else if (state.viewZoom < defaultViewZoom && fitZoom >= defaultViewZoom) {
+					targetZoom = defaultViewZoom;
+				}
+
+				if (Math.abs(targetZoom - state.viewZoom) < 1e-6) {
+					return;
+				}
+
+				const usedW = spanX * targetZoom;
+				const usedH = spanY * targetZoom;
+				state.viewZoom = targetZoom;
+				// Preserve default horizontal placement (zoom=1, panX=0) by fixing the
+				// left circuit bound at its default screen x-position.
+				state.viewPanX = bounds.minX * (1 - targetZoom);
+				const verticalSpace = Math.max(0, rect.height - paddingTop - paddingBottom - usedH);
+				const topOffset = paddingTop + verticalSpace * 0.5;
+				state.viewPanY = topOffset - bounds.minY * targetZoom;
 			}
 
 			function drawGrid(w, h) {
@@ -2065,8 +2145,13 @@ export class CircuitApp {
 					const resistiveDirected = Number.isFinite(wireI)
 						? (-Math.abs(wireI) * segmentR)
 						: NaN;
+					const cellEmfMagnitude = (isCellEmfSegment && Number.isFinite(componentEmf(seg.componentId)))
+						? Math.abs(componentEmf(seg.componentId))
+						: NaN;
 					const pdPlusEmfDirected = isCellEmfSegment
-						? (Number.isFinite(pdSignedValue) ? Math.abs(pdSignedValue) : NaN)
+						? (Number.isFinite(cellEmfMagnitude)
+							? cellEmfMagnitude
+							: (Number.isFinite(pdSignedValue) ? Math.abs(pdSignedValue) : NaN))
 						: (Number.isFinite(resistiveDirected)
 							? resistiveDirected
 						: (Number.isFinite(pdSignedValue)
@@ -6764,7 +6849,11 @@ export class CircuitApp {
 							&& piece.componentSection === "cell-emf");
 						let fromKey = null;
 						let toKey = null;
-						if (Number.isFinite(wireI) || isInfiniteCurrentValue(wireI)) {
+						if (isCellEmfPiece) {
+							const canonicalOrder = canonicalNodeOrderForPiece(piece, aKey, bKey);
+							fromKey = canonicalOrder.fromKey;
+							toKey = canonicalOrder.toKey;
+						} else if (Number.isFinite(wireI) || isInfiniteCurrentValue(wireI)) {
 							if (wireI >= 0) {
 								fromKey = aKey;
 								toKey = bKey;
@@ -6777,10 +6866,20 @@ export class CircuitApp {
 							fromKey = canonicalOrder.fromKey;
 							toKey = canonicalOrder.toKey;
 						}
+						const cellTraversalSign = (fromKey === aKey && toKey === bKey) ? 1 : -1;
+						const cellGeometrySignAtoB = Math.abs(piece.y2 - piece.y1) >= Math.abs(piece.x2 - piece.x1)
+							? (piece.y2 >= piece.y1 ? 1 : -1)
+							: (piece.x2 >= piece.x1 ? 1 : -1);
+						const cellRiseSignAtoB = isCellEmfPiece
+							? (getCellPolarity(piece.componentId) * cellGeometrySignAtoB)
+							: NaN;
+						const directedCellEmf = isCellEmfPiece && Number.isFinite(sectionEmf)
+							? (Math.abs(sectionEmf) * cellTraversalSign * cellRiseSignAtoB)
+							: NaN;
 						const directedPdPlusEmf = (cached && Number.isFinite(cached.directedPdDisplay) && !isCellEmfPiece)
 							? cached.directedPdDisplay
 							: (isCellEmfPiece
-								? directedVoltageForPiece(fromKey, toKey, aKey, bKey, signedDelta)
+								? directedCellEmf
 								: (Number.isFinite(wireI)
 									? (-Math.abs(wireI) * sectionR)
 									: directedVoltageForPiece(fromKey, toKey, aKey, bKey, signedDelta)));
@@ -7341,6 +7440,7 @@ export class CircuitApp {
 				handleDrop(dropX, dropY) {
 					if (!state.drag) return;
 					const id = state.drag.id;
+						const wasPlacedBeforeDrop = componentIsPlaced(id);
 					const layout = state.layout;
 					// Use both cursor position AND dragged-component centre for hit detection
 					const dragCentreX = state.drag.x;
@@ -7350,12 +7450,14 @@ export class CircuitApp {
 						const hitY = this.rectHit(leftDirectTarget, dropX, dropY) ? dropY : dragCentreY;
 						const insertIndex = hitY < leftDirectTarget.y ? leftDirectTarget.leftSeriesIndex : (leftDirectTarget.leftSeriesIndex + 1);
 						insertIntoLeftSeriesAt(id, insertIndex);
+							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
 					}
 					const leftSeriesZone = layout.leftSeriesInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
 					if (leftSeriesZone) {
 						insertIntoLeftSeriesAt(id, leftSeriesZone.insertIndex);
+							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
 					}
@@ -7365,6 +7467,7 @@ export class CircuitApp {
 
 					if (parallelTarget) {
 						if (addResistorInParallel(id, parallelTarget.id)) {
+								if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 							return;
 						}
@@ -7373,6 +7476,7 @@ export class CircuitApp {
 					const branchZone = layout.wireZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
 					if (branchZone) {
 						insertIntoBranchByTarget(id, branchZone.targetId, branchZone.mode);
+							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
 					}
@@ -7380,6 +7484,7 @@ export class CircuitApp {
 					const seriesZone = layout.stageInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
 					if (seriesZone) {
 						insertAsSeriesAt(id, seriesZone.insertIndex);
+							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 					}
 				}
@@ -7809,6 +7914,7 @@ export class CircuitApp {
 								removeResistorFromStages(r.id);
 								removeFromLeftSeries(r.id);
 							}
+							autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 						});
 
@@ -7854,6 +7960,7 @@ export class CircuitApp {
 								removeResistorFromStages(id);
 								removeFromLeftSeries(id);
 							}
+							autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 						});
 					}
@@ -7875,6 +7982,7 @@ export class CircuitApp {
 								removeResistorFromStages(id);
 								removeFromLeftSeries(id);
 							}
+							autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 						});
 					}
@@ -7887,6 +7995,12 @@ export class CircuitApp {
 
 					potentialGraphCheck.addEventListener("input", () => {
 						state.potentialGraphMode = potentialGraphCheck.checked;
+						if (state.potentialGraphMode) {
+							state.viewZoom = 1;
+							state.viewPanX = 0;
+							state.viewPanY = 0;
+							autoFitCircuitViewToCanvas();
+						}
 						resetGraphZoomToFit();
 					});
 
