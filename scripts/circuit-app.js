@@ -49,7 +49,14 @@ export class CircuitApp {
 			const actionHitAreas = [];
 			const wireResistanceLabelQueue = [];
 			const sliderDragState = { active: false, paramKey: null };
-			const graphDragState = { active: false, lastX: 0, lastY: 0, mode: "pan" };
+			const graphDragState = {
+				active: false,
+				lastX: 0,
+				lastY: 0,
+				mode: "pan",
+				rotateLastAngle: NaN,
+				rotateLastRadius: 0
+			};
 			const viewDragState = { active: false, lastRawX: 0, lastRawY: 0 };
 			const mainSwitchTapState = { active: false, moved: false, tapStartX: 0, tapStartY: 0, tapThreshold: 4 };
 			const touchState = { active: false, isOverGraph: false, lastDistance: 0, firstTouchId: null };
@@ -68,6 +75,7 @@ export class CircuitApp {
 			const GRAPH_CIRCUIT_MARGIN = 40;
 			const GRAPH_SIDE_MARGIN = 12;
 			const GRAPH_PATH_HALF_WIDTH = 18;
+			const GRAPH_INTERACTION_MARGIN = 18;
 			const CONNECTOR_WIRE = 18.5;
 			const BUS_CONNECTOR = 18.5;
 			const END_BUS_CONNECTOR = 18.5;
@@ -155,6 +163,20 @@ export class CircuitApp {
 
 			function isShortCircuitCurrentValue(current) {
 				return false;
+			}
+
+			function getGraphInteractionBounds(layout) {
+				if (!layout) return null;
+				const projected = computeProjectedGraphBoundsImpl(layout, state.graphZoom);
+				if (!projected) return null;
+				const graphCenterX = (layout.circuitRight + layout.w) * 0.5 + state.graphPanX;
+				const graphCenterY = layout.midY + state.graphPanY;
+				return {
+					left: graphCenterX + projected.minX,
+					right: graphCenterX + projected.maxX,
+					top: graphCenterY + projected.minY,
+					bottom: graphCenterY + projected.maxY
+				};
 			}
 
 			function isHighCurrentWarning(solution) {
@@ -945,12 +967,16 @@ export class CircuitApp {
 					const ux = (point.x - xRef) * xyScale;
 					const uy = (point.y - yRef) * xyScale;
 					const uz = point.v * zScale;
-					const xr = ux * cAz - uy * sAz;
-					const yr = ux * sAz + uy * cAz;
-					const sx0 = xr + uz * 0.34 * cEl;
-					const sy0 = yr * 0.66 - uz * sEl;
-					const sx = sx0 * cRoll - sy0 * sRoll;
-					const sy = sx0 * sRoll + sy0 * cRoll;
+					// Apply roll (true 3D y-axis rotation) to 3D coordinates
+					const ux_r = ux * cRoll + uz * sRoll;
+					const uz_r = -ux * sRoll + uz * cRoll;
+					const uy_r = uy;
+					// Apply azimuth (z-axis rotation)
+					const xr = ux_r * cAz - uy_r * sAz;
+					const yr = ux_r * sAz + uy_r * cAz;
+					// Apply elevation projection
+					const sx = xr + uz_r * 0.34 * cEl;
+					const sy = yr * 0.66 - uz_r * sEl;
 					if (sx < minX) minX = sx;
 					if (sx > maxX) maxX = sx;
 					if (sy < minY) minY = sy;
@@ -4364,35 +4390,40 @@ export class CircuitApp {
 					const ux = (x - xRef) * xyScale;
 					const uy = (y - yRef) * xyScale;
 					const uz = (v - vMid) * zScale;
-					const xr = ux * cAz - uy * sAz;
-					const yr = ux * sAz + uy * cAz;
-					const sx0 = xr + uz * 0.34 * cEl;
-					const sy0 = yr * 0.66 - uz * sEl;
-					const sx = sx0 * cRoll - sy0 * sRoll;
-					const sy = sx0 * sRoll + sy0 * cRoll;
-					return {
-						x: (layout.circuitRight + layout.w) * 0.5 + state.graphPanX + sx,
-						y: layout.midY + state.graphPanY + sy
-					};
-				}
+				// Apply roll (true 3D y-axis rotation) to 3D coordinates
+				const ux_r = ux * cRoll + uz * sRoll;
+				const uz_r = -ux * sRoll + uz * cRoll;
+				const uy_r = uy;
+				// Apply azimuth (z-axis rotation)
+				const xr = ux_r * cAz - uy_r * sAz;
+				const yr = ux_r * sAz + uy_r * cAz;
+				// Apply elevation projection
+				const sx = xr + uz_r * 0.34 * cEl;
+				const sy = yr * 0.66 - uz_r * sEl;
+				return {
+					x: (layout.circuitRight + layout.w) * 0.5 + state.graphPanX + sx,
+					y: layout.midY + state.graphPanY + sy
+				};
+			}
 
-				ctx.save();
-				const azDeg = (state.graphAzimuth * 180 / Math.PI);
-				const elDeg = (state.graphElevation * 180 / Math.PI);
-				const rollDeg = (state.graphRoll * 180 / Math.PI);
-				const readoutX = layout.w - 14;
-				const readoutY = layout.h - 14;
-				const readoutStep = 14;
-				ctx.fillStyle = "rgba(51, 66, 85, 0.95)";
-				ctx.font = "600 11px system-ui, sans-serif";
-				ctx.textAlign = "right";
-				ctx.textBaseline = "alphabetic";
-				ctx.fillText("Zoom " + state.graphZoom.toFixed(2) + "x", readoutX, readoutY - readoutStep * 0);
-				ctx.fillText("Roll " + state.graphRoll.toFixed(3) + " rad (" + rollDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 1);
-				ctx.fillText("El " + state.graphElevation.toFixed(3) + " rad (" + elDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 2);
-				ctx.fillText("Az " + state.graphAzimuth.toFixed(3) + " rad (" + azDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 3);
-				const referenceLabel = state.invertVoltageAxis ? "+ terminal" : "- terminal";
-				ctx.fillText("Reference: " + referenceLabel + " = 0 V", readoutX, readoutY - readoutStep * 4);
+			ctx.save();
+			const azDeg = (state.graphAzimuth * 180 / Math.PI);
+			const elDeg = (state.graphElevation * 180 / Math.PI);
+			const rollDeg = (state.graphRoll * 180 / Math.PI);
+			const readoutX = layout.w - 14;
+			const readoutY = layout.h - 14;
+			const readoutStep = 14;
+			ctx.fillStyle = "rgba(51, 66, 85, 0.95)";
+			ctx.font = "600 11px system-ui, sans-serif";
+			ctx.textAlign = "right";
+			ctx.textBaseline = "alphabetic";
+			ctx.fillText("Zoom " + state.graphZoom.toFixed(2) + "x", readoutX, readoutY - readoutStep * 0);
+			ctx.fillText("Roll " + state.graphRoll.toFixed(3) + " rad (" + rollDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 1);
+			ctx.fillText("El " + state.graphElevation.toFixed(3) + " rad (" + elDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 2);
+			ctx.fillText("Az " + state.graphAzimuth.toFixed(3) + " rad (" + azDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 3);
+			const referenceLabel = state.invertVoltageAxis ? "+ terminal" : "- terminal";
+			ctx.fillText("Reference: " + referenceLabel + " = 0 V", readoutX, readoutY - readoutStep * 4);
+			ctx.fillText("Controls: Left-drag pan, Right-drag potential-axis rotate, Shift+Left-drag x/y rotate, Wheel zoom", readoutX, readoutY - readoutStep * 5);
 
 				function endpointKey(x, y, v) {
 					return x.toFixed(3) + "|" + y.toFixed(3) + "|" + v.toFixed(3);
@@ -5532,7 +5563,7 @@ export class CircuitApp {
 						if (!activeDrag && sol) {
 							ctx.font = "600 10.5px system-ui, sans-serif";
 							ctx.fillStyle = "#334";
-							ctx.fillText(sol.V.toFixed(2) + " V", -14, 8);
+							ctx.fillText(Math.abs(sol.V).toFixed(2) + " V", -14, 8);
 						}
 					} else {
 						ctx.fillStyle = activeDrag ? "rgba(255, 255, 255, 0.88)" : "#ffffff";
@@ -5565,7 +5596,7 @@ export class CircuitApp {
 							ctx.font = "600 10.5px system-ui, sans-serif";
 							ctx.fillStyle = "#334";
 							if (sol) {
-								ctx.fillText(sol.V.toFixed(2) + " V", 0, +10);
+								ctx.fillText(Math.abs(sol.V).toFixed(2) + " V", 0, +10);
 							}
 						}
 					}
@@ -7422,14 +7453,12 @@ export class CircuitApp {
 				isOverGraphPanelAtLogical(logX, logY) {
 					if (!state.layout || !state.potentialGraphMode) return false;
 					if (!Number.isFinite(logX) || !Number.isFinite(logY)) return false;
-					const panelLeftByCircuit = Number.isFinite(state.layout.circuitRight)
-						? (state.layout.circuitRight + 8)
-						: (state.layout.w * 0.55);
-					const panelLeft = Math.min(panelLeftByCircuit, state.layout.w * 0.58);
-					return logX >= panelLeft
-						&& logX <= state.layout.w
-						&& logY >= 0
-						&& logY <= state.layout.h;
+					const bounds = getGraphInteractionBounds(state.layout);
+					if (!bounds) return false;
+					return logX >= (bounds.left - GRAPH_INTERACTION_MARGIN)
+						&& logX <= (bounds.right + GRAPH_INTERACTION_MARGIN)
+						&& logY >= (bounds.top - GRAPH_INTERACTION_MARGIN)
+						&& logY <= (bounds.bottom + GRAPH_INTERACTION_MARGIN);
 				}
 
 				isOverGraphSurface(evt) {
@@ -7493,6 +7522,8 @@ export class CircuitApp {
 					const pos = this.pointerPos(evt);
 					const raw = this.pointerRawPos(evt);
 					const overGraphSurface = this.isOverGraphSurface(evt);
+					const isLeftButton = evt.button === 0;
+					const isRightButton = evt.button === 2;
 					const SWITCH_TAP_DRAG_THRESHOLD = 4;
 					mainSwitchTapState.active = false;
 					mainSwitchTapState.moved = false;
@@ -7522,9 +7553,17 @@ export class CircuitApp {
 						evt.preventDefault();
 						return;
 					}
-					if (overGraphSurface) {
+					if (overGraphSurface && (isLeftButton || isRightButton)) {
 						graphDragState.active = true;
-						graphDragState.mode = evt.altKey ? "roll" : (evt.shiftKey ? "rotate" : "pan");
+						graphDragState.mode = isRightButton ? "rotate" : (evt.shiftKey ? "tilt" : "pan");
+						if (isRightButton && state.layout) {
+							const graphCenterX = (state.layout.circuitRight + state.layout.w) * 0.5 + state.graphPanX;
+							const graphCenterY = state.layout.midY + state.graphPanY;
+							const vx = pos.x - graphCenterX;
+							const vy = pos.y - graphCenterY;
+							graphDragState.rotateLastRadius = Math.hypot(vx, vy);
+							graphDragState.rotateLastAngle = Math.atan2(vy, vx);
+						}
 						graphDragState.lastX = pos.x;
 						graphDragState.lastY = pos.y;
 						canvas.setPointerCapture(evt.pointerId);
@@ -7532,6 +7571,7 @@ export class CircuitApp {
 						evt.preventDefault();
 						return;
 					}
+					if (!isLeftButton) return;
 					if (state.layout && this.switchHit(state.layout, pos.x, pos.y)) {
 						mainSwitchTapState.active = true;
 						mainSwitchTapState.moved = false;
@@ -7567,12 +7607,15 @@ export class CircuitApp {
 					}
 					const hit = state.layout.rects.find((rect) => this.rectHit(rect, pos.x, pos.y));
 					if (!hit) {
-						viewDragState.active = true;
-						viewDragState.lastRawX = raw.rawX;
-						viewDragState.lastRawY = raw.rawY;
+						// Only allow whole-canvas panning outside the circuit interaction region.
+						if (!this.isOverGraphPanelAtLogical(pos.x, pos.y)) {
+							viewDragState.active = true;
+							viewDragState.lastRawX = raw.rawX;
+							viewDragState.lastRawY = raw.rawY;
 							canvas.setPointerCapture(evt.pointerId);
 							canvas.style.cursor = "grabbing";
 							evt.preventDefault();
+						}
 						return;
 					}
 					state.drag = {
@@ -7606,10 +7649,27 @@ export class CircuitApp {
 						const dx = pos.x - graphDragState.lastX;
 						const dy = pos.y - graphDragState.lastY;
 						if (graphDragState.mode === "rotate") {
-							state.graphAzimuth += dx * 0.010;
-							state.graphElevation = clamp(state.graphElevation - dy * 0.010, 0.24, 1.22);
-						} else if (graphDragState.mode === "roll") {
+							if (state.layout) {
+								const graphCenterX = (state.layout.circuitRight + state.layout.w) * 0.5 + state.graphPanX;
+								const graphCenterY = state.layout.midY + state.graphPanY;
+								const vx = pos.x - graphCenterX;
+								const vy = pos.y - graphCenterY;
+								const radius = Math.hypot(vx, vy);
+								const angle = Math.atan2(vy, vx);
+								const minOrbitRadius = 8;
+								if (radius > minOrbitRadius && graphDragState.rotateLastRadius > minOrbitRadius && Number.isFinite(graphDragState.rotateLastAngle)) {
+									const deltaAngle = Math.atan2(
+										Math.sin(angle - graphDragState.rotateLastAngle),
+										Math.cos(angle - graphDragState.rotateLastAngle)
+									);
+									state.graphAzimuth += deltaAngle;
+								}
+								graphDragState.rotateLastRadius = radius;
+								graphDragState.rotateLastAngle = angle;
+							}
+						} else if (graphDragState.mode === "tilt") {
 							state.graphRoll += dx * 0.010;
+							state.graphElevation = clamp(state.graphElevation - dy * 0.010, 0.24, 1.22);
 						} else {
 							state.graphPanX += dx;
 							state.graphPanY += dy;
@@ -7635,8 +7695,8 @@ export class CircuitApp {
 						const s = sliderHitAreas.find((item) => item.paramKey === sliderDragState.paramKey);
 						if (!s) return;
 						const t = clamp((pos.y - s.trackTop) / (s.trackBottom - s.trackTop), 0, 1);
-						const raw = s.max - t * (s.max - s.min);
-						const snapped = Math.round(raw / s.step) * s.step;
+						const rawValue = s.max - t * (s.max - s.min);
+						const snapped = Math.round(rawValue / s.step) * s.step;
 						const decimals = s.step < 1 ? 1 : 0;
 						const value = Number(clamp(snapped, s.min, s.max).toFixed(decimals));
 						const cellEmfId = cellIdFromSliderKey(s.paramKey, CELL_EMF_SLIDER_KEYS);
@@ -7784,6 +7844,11 @@ export class CircuitApp {
 					state.graphZoom = newZoom;
 				}
 
+				onContextMenu(evt) {
+					if (!this.isOverGraphSurface(evt)) return;
+					evt.preventDefault();
+				}
+
 				getTouchDistance(touch1, touch2) {
 					const dx = touch1.clientX - touch2.clientX;
 					const dy = touch1.clientY - touch2.clientY;
@@ -7855,37 +7920,7 @@ export class CircuitApp {
 					}
 					const logX = (rawX - state.viewPanX) / state.viewZoom;
 					const logY = (rawY - state.viewPanY) / state.viewZoom;
-					if (this.isOverGraphPanelAtLogical(logX, logY)) {
-						return true;
-					}
-					if (!state.graphTrackGeometry) {
-						return false;
-					}
-					const geom = state.graphTrackGeometry;
-					if (geom.logicalBounds) {
-						const lb = geom.logicalBounds;
-						return logX >= lb.left && logX <= lb.right && logY >= lb.top && logY <= lb.bottom;
-					}
-					const bounds = geom.screenBounds;
-					if (bounds) {
-						return rawX >= bounds.left
-							&& rawX <= bounds.right
-							&& rawY >= bounds.top
-							&& rawY <= bounds.bottom;
-					}
-					if (!geom.screenPath) {
-						return false;
-					}
-					const dpr = window.devicePixelRatio || 1;
-					ctx.save();
-					ctx.setTransform(1, 0, 0, 1, 0, 0);
-					const overGraph = ctx.isPointInPath(
-						geom.screenPath,
-						rawX * dpr,
-						rawY * dpr
-					);
-					ctx.restore();
-					return overGraph;
+					return this.isOverGraphPanelAtLogical(logX, logY);
 				}
 
 				updatePotentialGraphVisibility() {
@@ -7897,6 +7932,7 @@ export class CircuitApp {
 					canvas.addEventListener("pointermove", this.onPointerMove.bind(this));
 					canvas.addEventListener("pointerup", this.finishDrag.bind(this));
 					canvas.addEventListener("pointercancel", this.finishDrag.bind(this));
+					canvas.addEventListener("contextmenu", this.onContextMenu.bind(this));
 					canvas.addEventListener("wheel", this.onWheel.bind(this), { passive: false });
 					canvas.addEventListener("touchstart", this.onTouchStart.bind(this), { passive: false });
 					canvas.addEventListener("touchmove", this.onTouchMove.bind(this), { passive: false });
