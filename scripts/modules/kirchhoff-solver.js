@@ -105,7 +105,6 @@ export function createKirchhoffSolver(deps) {
 				if (nodeIsCornerOrMultiJunction(edge.nodeB, nodeB)) trim += GRAPH_PATH_HALF_WIDTH;
 				totalR += Math.max(0, (baseLen - trim) * SHORT_WIRE_R_PER_PIXEL);
 			}
-			const loopI = Number.isFinite(state.solved.Itotal) ? state.solved.Itotal : 0;
 			const loopR = Math.max(1e-12, totalR);
 			graphRouteRows = [{
 				from: "J1",
@@ -189,9 +188,11 @@ export function createKirchhoffSolver(deps) {
 		let networkSolution = solveJunctionNetwork(sectionRows);
 		if (!networkSolution && sectionRows.length === 1 && sectionRows[0].isSeriesFallback === true) {
 			const row = sectionRows[0];
-			const I = Number.isFinite(state.solved.Itotal)
-				? state.solved.Itotal
-				: (row.R > 1e-12 ? (row.E / row.R) : 0);
+			// Use E/R from the route-graph measurement so I is consistent with the R(total) and
+			// SumEmf columns shown in the Kirchhoff debug table.  Using state.solved.Itotal here
+			// caused a mismatch because it was computed by the matrix solver with geometrically-
+			// estimated wire lengths (different resistance model).
+			const I = row.R > 1e-12 ? (row.E / row.R) : 0;
 			networkSolution = {
 				nodeV: new Map([["J1", 0]]),
 				branchResults: [{ I, Vr: I * row.R, netPd: 0 }]
@@ -327,11 +328,13 @@ export function createKirchhoffSolver(deps) {
 						&& Number.isFinite(existingSol.Vbottom))
 						? (existingSol.Vbottom - existingSol.Vtop)
 						: NaN;
-					if (row.isSeriesFallback && existingSol && Number.isFinite(existingSol.I)) {
-						state.solved.byId[cid].I = existingSol.I;
-						state.solved.byId[cid].V = Number.isFinite(existingDeltaV)
-							? existingDeltaV
-							: (Number.isFinite(existingSol.V) ? existingSol.V : (sectionI * cR - cEmf));
+					if (row.isSeriesFallback) {
+						// Use the Kirchhoff route-graph current (sectionI) so this component's
+						// arrow stays consistent with state.solved.Itotal and the bottom wire arrow.
+						// The old matrix-solver existingSol.I used a different resistance model
+						// (geometric wire length estimates) which diverges for short circuits.
+						state.solved.byId[cid].I = sectionI;
+						state.solved.byId[cid].V = sectionI * cR - cEmf;
 						state.solved.byId[cid].arrowAlignFactor = arrowAlignFactor;
 					} else {
 						state.solved.byId[cid].I = sectionI;

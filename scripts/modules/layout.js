@@ -18,9 +18,10 @@ export class CircuitLayoutEngine {
 		const state = this.state;
 		const componentBodyHeight = this.componentBodyHeight;
 		const midY = h * 0.5;
-		const graphShift = state.potentialGraphMode ? Math.round(w * 0.18) : 0;
+		const graphShift = state.potentialGraphMode ? Math.round(w * 0.5 - 30) : 0;
 		const xCell = Math.max(110, w * 0.24 - graphShift);
-		const xRight = Math.min(w - 110, xCell + 270);
+		const maxXRight = state.potentialGraphMode ? Math.round(w * 0.5 - 15) : (w - 110);
+		const xRight = Math.min(maxXRight, xCell + 270);
 		const switchAnchorX = Math.min(xRight - 34, (xCell + xRight) * 0.5 + 26);
 		const xSwitch = (((xCell + 34) + (switchAnchorX - 28)) * 0.5) - 20;
 		const activeStages = state.stages.slice();

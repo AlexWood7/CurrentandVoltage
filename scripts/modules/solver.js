@@ -612,7 +612,7 @@ const state = circuitState;
 						hasInfiniteCurrent,
 						stageNodeV,
 						Vext: leftRunV,
-						switchVLeft: 0,
+						switchVLeft: leftRunV,
 						switchVRight,
 						bottomRightV: runV,
 						cellTopPlateV,
@@ -1139,6 +1139,19 @@ const state = circuitState;
 
 			solve() {
 					this.state.useShortSwitchWireResistance = false;
+
+					// When the main switch is open, skip the matrix solver entirely.
+					// The matrix models open switch as SWITCH_OPEN_RESISTANCE (1 GΩ) which
+					// produces a tiny but non-zero leakage current. Use the dedicated
+					// open-switch solution so Itotal and all component currents are exactly zero.
+					if (!this.state.switchClosed) {
+						const openSolved = this.buildOpenSwitchSolution();
+						this.state.solved = this.finalizeSolvedSolution(openSolved || this.buildSingularMatrixDiagnosticSolution());
+						this.state.solved.wireResistanceDiagnostic = this.buildWireResistanceDiagnostic(this.state.solved);
+						this.onLegendUpdate();
+						return;
+					}
+
 					let matrixSolved = this.solveWithKirchhoffMatrix(true);
 					if (matrixSolved) {
 						let solved = this.finalizeSolvedSolution(matrixSolved);

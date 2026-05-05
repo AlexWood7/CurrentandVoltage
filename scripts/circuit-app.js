@@ -107,12 +107,13 @@ export class CircuitApp {
 				graphAzimuth: graphOrientationDefaults.azimuth,
 				graphElevation: graphOrientationDefaults.elevation,
 				graphRoll: graphOrientationDefaults.roll,
-				graphZoom: 1.41,
+				graphZoom: 1,
 				graphPanX: 0,
 				graphPanY: 0,
 				viewZoom: 1,
 				viewPanX: 0,
 				viewPanY: 0,
+				graphColorScale: { displayMin: 0, displayMax: 1, maxAbs: 1 },
 				cellEmfById: { Cell1: 6, Cell2: 6, Cell3: 6, Cell4: 6 },
 				cellPolarityById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
 				cellRInternalById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
@@ -161,6 +162,30 @@ export class CircuitApp {
 				return current === Infinity || current === -Infinity;
 			}
 
+			function getGraphBaseCenter(layout) {
+				if (!layout) return { x: 0, y: 0 };
+				if (state.potentialGraphMode) {
+					const circuitRightScreenX = layout.circuitRight * state.viewZoom + state.viewPanX;
+					const targetScreenX = (circuitRightScreenX + layout.w) * 0.5;
+					const targetScreenY = layout.midY;
+					const logicalX = (targetScreenX - state.viewPanX) / Math.max(1e-6, state.viewZoom);
+					const logicalY = (targetScreenY - state.viewPanY) / Math.max(1e-6, state.viewZoom);
+					return { x: logicalX, y: logicalY };
+				}
+				return {
+					x: (layout.circuitRight + layout.w) * 0.5,
+					y: layout.midY
+				};
+			}
+
+			function getGraphCenter(layout) {
+				const base = getGraphBaseCenter(layout);
+				return {
+					x: base.x + state.graphPanX,
+					y: base.y + state.graphPanY
+				};
+			}
+
 			function isShortCircuitCurrentValue(current) {
 				return false;
 			}
@@ -169,13 +194,12 @@ export class CircuitApp {
 				if (!layout) return null;
 				const projected = computeProjectedGraphBoundsImpl(layout, state.graphZoom);
 				if (!projected) return null;
-				const graphCenterX = (layout.circuitRight + layout.w) * 0.5 + state.graphPanX;
-				const graphCenterY = layout.midY + state.graphPanY;
+				const graphCenter = getGraphCenter(layout);
 				return {
-					left: graphCenterX + projected.minX,
-					right: graphCenterX + projected.maxX,
-					top: graphCenterY + projected.minY,
-					bottom: graphCenterY + projected.maxY
+					left: graphCenter.x + projected.minX,
+					right: graphCenter.x + projected.maxX,
+					top: graphCenter.y + projected.minY,
+					bottom: graphCenter.y + projected.maxY
 				};
 			}
 
@@ -570,9 +594,21 @@ export class CircuitApp {
 
 			function computeLayoutImpl(w, h) {
 				const midY = h * 0.5;
-				const graphShift = state.potentialGraphMode ? Math.round(w * 0.18) : 0;
-				const xCell = Math.max(110, w * 0.24 - graphShift);
-				const xRight = Math.min(w - 110, xCell + 270);
+				let xCell;
+				let xRight;
+				if (state.potentialGraphMode) {
+					const leftHalfWidth = w * 0.5;
+					const desiredCenter = leftHalfWidth * 0.5;
+					const circuitSpan = 270;
+					const minXCell = 110;
+					const maxXRight = Math.max(minXCell + circuitSpan, leftHalfWidth - 15);
+					xCell = clamp(desiredCenter - circuitSpan * 0.5, minXCell, maxXRight - circuitSpan);
+					xRight = xCell + circuitSpan;
+				} else {
+					const graphShift = 0;
+					xCell = Math.max(110, w * 0.24 - graphShift);
+					xRight = Math.min(w - 110, xCell + 270);
+				}
 				const switchAnchorX = Math.min(xRight - 34, (xCell + xRight) * 0.5 + 26);
 				const xSwitch = (((xCell + 34) + (switchAnchorX - 28)) * 0.5) - 20;
 				const activeStages = state.stages.slice();
@@ -899,32 +935,36 @@ export class CircuitApp {
 				};
 			}
 
-			function graphReferenceCellVoltage() {
-				const anchorId = placedCellIds()[0];
-				if (!anchorId) return 0;
-				const terminals = cellTerminalVoltages(anchorId);
-				if (!terminals) return 0;
-				return state.invertVoltageAxis ? terminals.positiveV : terminals.negativeV;
-			}
-
-			function graphReferenceVoltage() {
-				return graphReferenceCellVoltage();
-			}
-
 			function graphDisplayVoltage(v) {
-				const referenceV = graphReferenceVoltage();
-				return state.invertVoltageAxis ? (referenceV - v) : (v - referenceV);
+				// Solver potentials are already rebased so min = 0 V.
+				// invertVoltageAxis flips the vertical axis so the highest potential sits at the floor.
+				if (state.invertVoltageAxis) {
+					const vMax = (state.solved && Number.isFinite(state.solved.vMax)) ? state.solved.vMax : 0;
+					return vMax - v;
+				}
+				return v;
 			}
 
-			function actualVoltageFromGraphDisplay(graphV) {
-				const referenceV = graphReferenceVoltage();
-				return state.invertVoltageAxis ? (referenceV - graphV) : (referenceV + graphV);
+			function actualVoltageFromGraphDisplay(gv) {
+				if (state.invertVoltageAxis) {
+					const vMax = (state.solved && Number.isFinite(state.solved.vMax)) ? state.solved.vMax : 0;
+					return vMax - gv;
+				}
+				return gv;
 			}
 
 			function collectGraphFitPointsImpl(layout) {
 				const segs = buildCircuitVoltageSegments(layout);
 				if (!segs.length) return [];
-				const graphV = graphDisplayVoltage;
+				let rawVMax = -Infinity;
+				for (const s of segs) {
+					if (Number.isFinite(s.v1) && s.v1 > rawVMax) rawVMax = s.v1;
+					if (Number.isFinite(s.v2) && s.v2 > rawVMax) rawVMax = s.v2;
+				}
+				if (!Number.isFinite(rawVMax)) rawVMax = 0;
+				const graphV = state.invertVoltageAxis
+					? (v) => rawVMax - v
+					: (v) => v;
 				const points = [
 					{ x: layout.xCell, y: layout.yTop, v: 0 },
 					{ x: layout.xRight, y: layout.yTop, v: 0 },
@@ -995,9 +1035,17 @@ export class CircuitApp {
 				if (!bounds) {
 					return { zoom: state.graphZoom, panX: state.graphPanX, panY: state.graphPanY };
 				}
-				const graphCenterX = (layout.circuitRight + layout.w) * 0.5;
-				const graphCenterY = layout.midY;
-				const leftRoom = Math.max(GRAPH_CIRCUIT_MARGIN, graphCenterX - layout.circuitRight - GRAPH_CIRCUIT_MARGIN);
+				const GRAPH_NON_OVERLAP_PADDING = 18;
+				const GRAPH_MAX_VERTICAL_FRACTION = 0.5;
+				const graphBaseCenter = getGraphBaseCenter(layout);
+				const graphCenterX = graphBaseCenter.x;
+				const graphCenterY = graphBaseCenter.y;
+				const noOverlapLeftLimit = layout.circuitRight + GRAPH_NON_OVERLAP_PADDING;
+				const leftLimit = state.potentialGraphMode
+					? Math.max(layout.w * 0.5 + GRAPH_SIDE_MARGIN, noOverlapLeftLimit)
+					: (layout.circuitRight + GRAPH_CIRCUIT_MARGIN);
+				const rightLimit = layout.w - GRAPH_SIDE_MARGIN;
+				const leftRoom = Math.max(GRAPH_SIDE_MARGIN, graphCenterX - leftLimit);
 				const rightRoom = Math.max(GRAPH_SIDE_MARGIN, layout.w - graphCenterX - GRAPH_SIDE_MARGIN);
 				const topRoom = Math.max(GRAPH_VERTICAL_MARGIN, graphCenterY - GRAPH_VERTICAL_MARGIN);
 				const bottomRoom = Math.max(GRAPH_VERTICAL_MARGIN, layout.h - graphCenterY - GRAPH_VERTICAL_MARGIN);
@@ -1008,9 +1056,15 @@ export class CircuitApp {
 				const bottomExtent = Math.max(1e-6, bounds.maxY - centerY);
 				const fitX = Math.min(leftRoom / leftExtent, rightRoom / rightExtent);
 				const fitY = Math.min(topRoom / topExtent, bottomRoom / bottomExtent);
-				const zoom = clamp(Math.min(fitX, fitY) * GRAPH_AUTO_FIT_SCALE, GRAPH_MIN_AUTO_ZOOM, 4.0);
-				const minPanX = (layout.circuitRight + GRAPH_CIRCUIT_MARGIN) - (graphCenterX + bounds.minX * zoom);
-				const maxPanX = (layout.w - GRAPH_SIDE_MARGIN) - (graphCenterX + bounds.maxX * zoom);
+				const fitAtOne = Math.min(fitX, fitY);
+				const boundsHeightAtOne = Math.max(1e-6, bounds.maxY - bounds.minY);
+				const availableVertical = Math.max(1e-6, topRoom + bottomRoom);
+				const maxZoomByVerticalFraction = (availableVertical * GRAPH_MAX_VERTICAL_FRACTION) / boundsHeightAtOne;
+				const maxZoomByBounds = fitAtOne * GRAPH_AUTO_FIT_SCALE;
+				const zoomUpperBound = Math.min(maxZoomByBounds, maxZoomByVerticalFraction);
+				const zoom = clamp(zoomUpperBound, GRAPH_MIN_AUTO_ZOOM, 4.0);
+				const minPanX = leftLimit - (graphCenterX + bounds.minX * zoom);
+				const maxPanX = rightLimit - (graphCenterX + bounds.maxX * zoom);
 				const panX = minPanX <= maxPanX ? clamp(0, minPanX, maxPanX) : minPanX;
 				return {
 					zoom,
@@ -1128,16 +1182,22 @@ export class CircuitApp {
 					targetZoom = defaultViewZoom;
 				}
 
-				if (Math.abs(targetZoom - state.viewZoom) < 1e-6) {
-					return;
-				}
+				const zoomChanged = Math.abs(targetZoom - state.viewZoom) >= 1e-6;
 
 				const usedW = spanX * targetZoom;
 				const usedH = spanY * targetZoom;
-				state.viewZoom = targetZoom;
+				if (zoomChanged) {
+					state.viewZoom = targetZoom;
+				}
 				// Preserve default horizontal placement (zoom=1, panX=0) by fixing the
 				// left circuit bound at its default screen x-position.
-				state.viewPanX = bounds.minX * (1 - targetZoom);
+				if (state.potentialGraphMode) {
+					const targetCenterX = rect.width * 0.25;
+					const boundsCenterX = (bounds.minX + bounds.maxX) * 0.5;
+					state.viewPanX = targetCenterX - boundsCenterX * targetZoom;
+				} else {
+					state.viewPanX = bounds.minX * (1 - targetZoom);
+				}
 				const verticalSpace = Math.max(0, rect.height - paddingTop - paddingBottom - usedH);
 				const topOffset = paddingTop + verticalSpace * 0.5;
 				state.viewPanY = topOffset - bounds.minY * targetZoom;
@@ -1163,12 +1223,12 @@ export class CircuitApp {
 			}
 
 			function voltageToColor(v) {
-				const rawMin = Number.isFinite(state.solved.vMin) ? state.solved.vMin : 0;
-				const rawMax = Number.isFinite(state.solved.vMax) ? state.solved.vMax : 1;
 				const displayV = graphDisplayVoltage(v);
-				const minV = Math.min(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
-				const maxV = Math.max(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
-				const maxAbs = Math.max(1e-6, Math.abs(minV), Math.abs(maxV));
+				const scale = state.graphColorScale || { displayMin: 0, displayMax: 1, maxAbs: 1 };
+				const maxAbs = Math.max(1e-6,
+					Number.isFinite(scale.maxAbs) ? scale.maxAbs : 1,
+					Math.abs(Number.isFinite(scale.displayMin) ? scale.displayMin : 0),
+					Math.abs(Number.isFinite(scale.displayMax) ? scale.displayMax : 1));
 				const signed = clamp(displayV / maxAbs, -1, 1);
 				const hue = 60 + 60 * signed;
 				return `hsl(${hue}, 85%, 42%)`;
@@ -1828,6 +1888,7 @@ export class CircuitApp {
 					for (const [k, cur] of Object.entries(routedSegmentCurrentByIndex)) {
 						const seg = segments[Number(k)];
 						if (!seg || !Number.isFinite(cur)) continue;
+						if (seg.role === "component-main" || seg.role === "switch-blade") continue;
 						if (!Number.isFinite(seg.v1) || !Number.isFinite(seg.v2)) continue;
 						const dv = seg.v2 - seg.v1;
 						if (Math.abs(dv) <= 1e-12) continue;
@@ -1889,6 +1950,7 @@ export class CircuitApp {
 					let orientationMetric = 0;
 					for (const [k, sgn] of Object.entries(seriesLoopCurrentSignBySegmentIndex)) {
 						const seg = segments[Number(k)];
+						if (!seg || seg.role === "component-main" || seg.role === "switch-blade") continue;
 						if (!seg || !Number.isFinite(seg.v1) || !Number.isFinite(seg.v2)) continue;
 						const dv = seg.v2 - seg.v1;
 						if (Math.abs(dv) <= 1e-12) continue;
@@ -4237,6 +4299,144 @@ export class CircuitApp {
 
 
 
+			function buildTableDrivenGraphSegments(layout) {
+				const nodePairRows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
+				if (nodePairRows.length === 0) return null;
+				const routeGraph = buildCircuitRouteGraph(layout);
+				if (!routeGraph || !routeGraph.nodeByKey) return null;
+
+				const potentialByKey = new Map();
+				const cache = (state && state.wireLabelNodePotentialByKey && typeof state.wireLabelNodePotentialByKey === "object")
+					? state.wireLabelNodePotentialByKey
+					: null;
+				if (cache) {
+					for (const [k, v] of Object.entries(cache)) {
+						if (!k || !Number.isFinite(v)) continue;
+						potentialByKey.set(String(k), v);
+					}
+				}
+				if (potentialByKey.size === 0) return null;
+
+				const roleForRow = (row) => {
+					if (!row) return "wire";
+					if (row.kind === "component") return "component-main";
+					if (row.kind === "shoulder") return "shoulder-wire";
+					return "wire";
+				};
+
+				const out = [];
+				for (const row of nodePairRows) {
+					if (!row || !row.fromKey || !row.toKey) continue;
+					const fromKey = String(row.fromKey);
+					const toKey = String(row.toKey);
+					const fromNode = routeGraph.nodeByKey.get(fromKey);
+					const toNode = routeGraph.nodeByKey.get(toKey);
+					if (!fromNode || !toNode) continue;
+
+					let v1 = potentialByKey.get(fromKey);
+					let v2 = potentialByKey.get(toKey);
+					const dV = Number.isFinite(row.pdPlusEmf) ? row.pdPlusEmf : NaN;
+					if (Number.isFinite(v1) && !Number.isFinite(v2) && Number.isFinite(dV)) v2 = v1 + dV;
+					if (!Number.isFinite(v1) && Number.isFinite(v2) && Number.isFinite(dV)) v1 = v2 - dV;
+					if (!Number.isFinite(v1) || !Number.isFinite(v2)) continue;
+
+					out.push({
+						x1: fromNode.x,
+						y1: fromNode.y,
+						x2: toNode.x,
+						y2: toNode.y,
+						v1,
+						v2,
+						role: roleForRow(row),
+						componentId: row.componentId || null
+					});
+				}
+				const compBodyByCompId = new Map();
+				for (const seg of out) {
+					if (seg.role === "component-main" && seg.componentId && !isExtraCell(seg.componentId) && !isBranchSwitch(seg.componentId)) {
+						compBodyByCompId.set(seg.componentId, { minY: Math.min(seg.y1, seg.y2), maxY: Math.max(seg.y1, seg.y2) });
+					}
+				}
+				for (const seg of out) {
+					if (!seg.componentId || isExtraCell(seg.componentId) || isBranchSwitch(seg.componentId)) continue;
+					const hw = componentGraphHalfWidthById(seg.componentId);
+					if (seg.role === "component-main") {
+						seg.pathHalfWidth = hw;
+						seg.forceStartVertical = true;
+						seg.forceEndVertical = true;
+					} else if (seg.role === "shoulder-wire") {
+						const body = compBodyByCompId.get(seg.componentId);
+						if (body) {
+							const s1NearBody = Math.abs(seg.y1 - body.minY) < 1 || Math.abs(seg.y1 - body.maxY) < 1;
+							const s2NearBody = Math.abs(seg.y2 - body.minY) < 1 || Math.abs(seg.y2 - body.maxY) < 1;
+							if (s1NearBody && !s2NearBody) { seg.pathHalfWidthStart = hw; seg.pathHalfWidthEnd = GRAPH_PATH_HALF_WIDTH; }
+							else if (s2NearBody && !s1NearBody) { seg.pathHalfWidthStart = GRAPH_PATH_HALF_WIDTH; seg.pathHalfWidthEnd = hw; }
+						}
+					}
+				}
+				return out.length ? out : null;
+			}
+
+			function collectPotentialGraphSegments(layout) {
+				const rawCircuitSegs = buildCircuitVoltageSegments(layout);
+				const tableSegs = buildTableDrivenGraphSegments(layout);
+				const segs = tableSegs ? tableSegs.slice() : rawCircuitSegs.slice();
+				if (!tableSegs) return segs;
+				const hasSegment = (candidate) => segs.some((s) =>
+					Math.abs(s.x1 - candidate.x1) < 1e-6
+					&& Math.abs(s.y1 - candidate.y1) < 1e-6
+					&& Math.abs(s.x2 - candidate.x2) < 1e-6
+					&& Math.abs(s.y2 - candidate.y2) < 1e-6
+					&& Math.abs(s.v1 - candidate.v1) < 1e-6
+					&& Math.abs(s.v2 - candidate.v2) < 1e-6
+					&& (s.role || "") === (candidate.role || "")
+				);
+				for (const seg of rawCircuitSegs) {
+					if (!seg) continue;
+					if (seg.role === "switch-blade") {
+						const isOpenSwitch = (seg.componentId === "MAIN_SWITCH" && !state.switchClosed)
+							|| (seg.componentId && isOpenBranchSwitch(seg.componentId));
+						if (!isOpenSwitch) continue;
+					} else if (seg.role === "switch-open-node-wire") {
+						const isOpenMainSwitch = seg.componentId === "MAIN_SWITCH" && !state.switchClosed;
+						if (!isOpenMainSwitch) continue;
+					} else {
+						continue;
+					}
+					if (!hasSegment(seg)) segs.push(seg);
+				}
+				return segs;
+			}
+
+			function updateGraphColorScale(layout) {
+				if (!layout) {
+					state.graphColorScale = { displayMin: 0, displayMax: 1, maxAbs: 1 };
+					return;
+				}
+				const segs = collectPotentialGraphSegments(layout);
+				let displayMin = Infinity;
+				let displayMax = -Infinity;
+				for (const s of segs) {
+					if (!s) continue;
+					const dv1 = graphDisplayVoltage(s.v1);
+					const dv2 = graphDisplayVoltage(s.v2);
+					if (Number.isFinite(dv1)) {
+						displayMin = Math.min(displayMin, dv1);
+						displayMax = Math.max(displayMax, dv1);
+					}
+					if (Number.isFinite(dv2)) {
+						displayMin = Math.min(displayMin, dv2);
+						displayMax = Math.max(displayMax, dv2);
+					}
+				}
+				if (!Number.isFinite(displayMin) || !Number.isFinite(displayMax)) {
+					displayMin = 0;
+					displayMax = 1;
+				}
+				const maxAbs = Math.max(1e-6, Math.abs(displayMin), Math.abs(displayMax), 0);
+				state.graphColorScale = { displayMin, displayMax, maxAbs };
+			}
+
 			function drawPotentialGraph(layout) {
 				state.graphTrackGeometry = null;
 				const useVoltageColours = !!state.voltageColorMode;
@@ -4244,116 +4444,24 @@ export class CircuitApp {
 				const panelY = 0;
 				const panelW = layout.w;
 				const panelH = layout.h;
-				const buildTableDrivenGraphSegments = () => {
-					const nodePairRows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
-					if (nodePairRows.length === 0) return null;
-					const routeGraph = buildCircuitRouteGraph(layout);
-					if (!routeGraph || !routeGraph.nodeByKey) return null;
-
-					const potentialByKey = new Map();
-					const cache = (state && state.wireLabelNodePotentialByKey && typeof state.wireLabelNodePotentialByKey === "object")
-						? state.wireLabelNodePotentialByKey
-						: null;
-					if (cache) {
-						for (const [k, v] of Object.entries(cache)) {
-							if (!k || !Number.isFinite(v)) continue;
-							potentialByKey.set(String(k), v);
-						}
-					}
-					if (potentialByKey.size === 0) return null;
-
-					const roleForRow = (row) => {
-						if (!row) return "wire";
-						if (row.kind === "component") return "component-main";
-						if (row.kind === "shoulder") return "shoulder-wire";
-						return "wire";
-					};
-
-					const out = [];
-					for (const row of nodePairRows) {
-						if (!row || !row.fromKey || !row.toKey) continue;
-						const fromKey = String(row.fromKey);
-						const toKey = String(row.toKey);
-						const fromNode = routeGraph.nodeByKey.get(fromKey);
-						const toNode = routeGraph.nodeByKey.get(toKey);
-						if (!fromNode || !toNode) continue;
-
-						let v1 = potentialByKey.get(fromKey);
-						let v2 = potentialByKey.get(toKey);
-						const dV = Number.isFinite(row.pdPlusEmf) ? row.pdPlusEmf : NaN;
-						if (Number.isFinite(v1) && !Number.isFinite(v2) && Number.isFinite(dV)) v2 = v1 + dV;
-						if (!Number.isFinite(v1) && Number.isFinite(v2) && Number.isFinite(dV)) v1 = v2 - dV;
-						if (!Number.isFinite(v1) || !Number.isFinite(v2)) continue;
-
-						out.push({
-							x1: fromNode.x,
-							y1: fromNode.y,
-							x2: toNode.x,
-							y2: toNode.y,
-							v1,
-							v2,
-							role: roleForRow(row),
-							componentId: row.componentId || null
-						});
-					}
-					// Attach width fields for resistor components
-					const compBodyByCompId = new Map();
-					for (const seg of out) {
-						if (seg.role === "component-main" && seg.componentId && !isExtraCell(seg.componentId) && !isBranchSwitch(seg.componentId)) {
-							compBodyByCompId.set(seg.componentId, { minY: Math.min(seg.y1, seg.y2), maxY: Math.max(seg.y1, seg.y2) });
-						}
-					}
-					for (const seg of out) {
-						if (!seg.componentId || isExtraCell(seg.componentId) || isBranchSwitch(seg.componentId)) continue;
-						const hw = componentGraphHalfWidthById(seg.componentId);
-						if (seg.role === "component-main") {
-							seg.pathHalfWidth = hw;
-							seg.forceStartVertical = true;
-							seg.forceEndVertical = true;
-						} else if (seg.role === "shoulder-wire") {
-							const body = compBodyByCompId.get(seg.componentId);
-							if (body) {
-								const s1NearBody = Math.abs(seg.y1 - body.minY) < 1 || Math.abs(seg.y1 - body.maxY) < 1;
-								const s2NearBody = Math.abs(seg.y2 - body.minY) < 1 || Math.abs(seg.y2 - body.maxY) < 1;
-								if (s1NearBody && !s2NearBody) { seg.pathHalfWidthStart = hw; seg.pathHalfWidthEnd = GRAPH_PATH_HALF_WIDTH; }
-								else if (s2NearBody && !s1NearBody) { seg.pathHalfWidthStart = GRAPH_PATH_HALF_WIDTH; seg.pathHalfWidthEnd = hw; }
-							}
-						}
-					}
-					return out.length ? out : null;
-				};
-
-				const rawCircuitSegs = buildCircuitVoltageSegments(layout);
-				const tableSegs = buildTableDrivenGraphSegments();
-				const segs = tableSegs ? tableSegs.slice() : rawCircuitSegs;
-				if (tableSegs) {
-					const hasSegment = (candidate) => segs.some((s) =>
-						Math.abs(s.x1 - candidate.x1) < 1e-6
-						&& Math.abs(s.y1 - candidate.y1) < 1e-6
-						&& Math.abs(s.x2 - candidate.x2) < 1e-6
-						&& Math.abs(s.y2 - candidate.y2) < 1e-6
-						&& Math.abs(s.v1 - candidate.v1) < 1e-6
-						&& Math.abs(s.v2 - candidate.v2) < 1e-6
-						&& (s.role || "") === (candidate.role || "")
-					);
-					for (const seg of rawCircuitSegs) {
-						if (!seg) continue;
-						if (seg.role === "switch-blade") {
-							const isOpenSwitch = (seg.componentId === "MAIN_SWITCH" && !state.switchClosed)
-								|| (seg.componentId && isOpenBranchSwitch(seg.componentId));
-							if (!isOpenSwitch) continue;
-						} else if (seg.role === "switch-open-node-wire") {
-							const isOpenMainSwitch = seg.componentId === "MAIN_SWITCH" && !state.switchClosed;
-							if (!isOpenMainSwitch) continue;
-						} else {
-							continue;
-						}
-						if (!hasSegment(seg)) segs.push(seg);
-					}
-				}
+				const segs = collectPotentialGraphSegments(layout);
 				if (!segs.length) return;
 				const useStepwiseShortRouteSurface = false;
-				const graphV = graphDisplayVoltage;
+
+				// Pre-compute raw max so the inverted axis can use it for graphV.
+				let rawVMax = -Infinity;
+				for (const s of segs) {
+					if (Number.isFinite(s.v1) && s.v1 > rawVMax) rawVMax = s.v1;
+					if (Number.isFinite(s.v2) && s.v2 > rawVMax) rawVMax = s.v2;
+				}
+				if (!Number.isFinite(rawVMax)) rawVMax = 0;
+
+				// graphV maps solver-normalised (min=0) potentials to graph heights.
+				// Non-inverted: 0 is floor, higher potentials go up.
+				// Inverted: highest potential is floor, 0 (min) is at the top.
+				const graphV = state.invertVoltageAxis
+					? (v) => rawVMax - v
+					: (v) => v;
 
 				let vMin = Infinity;
 				let vMax = -Infinity;
@@ -4400,9 +4508,10 @@ export class CircuitApp {
 				// Apply elevation projection
 				const sx = xr + uz_r * 0.34 * cEl;
 				const sy = yr * 0.66 - uz_r * sEl;
+				const graphCenter = getGraphCenter(layout);
 				return {
-					x: (layout.circuitRight + layout.w) * 0.5 + state.graphPanX + sx,
-					y: layout.midY + state.graphPanY + sy
+					x: graphCenter.x + sx,
+					y: graphCenter.y + sy
 				};
 			}
 
@@ -4421,7 +4530,7 @@ export class CircuitApp {
 			ctx.fillText("Roll " + state.graphRoll.toFixed(3) + " rad (" + rollDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 1);
 			ctx.fillText("El " + state.graphElevation.toFixed(3) + " rad (" + elDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 2);
 			ctx.fillText("Az " + state.graphAzimuth.toFixed(3) + " rad (" + azDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 3);
-			const referenceLabel = state.invertVoltageAxis ? "+ terminal" : "- terminal";
+			const referenceLabel = state.invertVoltageAxis ? "max node potential" : "min node potential";
 			ctx.fillText("Reference: " + referenceLabel + " = 0 V", readoutX, readoutY - readoutStep * 4);
 			ctx.fillText("Controls: Left-drag pan, Right-drag potential-axis rotate, Shift+Left-drag x/y rotate, Wheel zoom", readoutX, readoutY - readoutStep * 5);
 
@@ -5239,12 +5348,12 @@ export class CircuitApp {
 
 			class CircuitSceneRenderer {
 				voltageToColor(v) {
-					const rawMin = Number.isFinite(state.solved.vMin) ? state.solved.vMin : 0;
-					const rawMax = Number.isFinite(state.solved.vMax) ? state.solved.vMax : 1;
 					const displayV = graphDisplayVoltage(v);
-					const minV = Math.min(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
-					const maxV = Math.max(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
-					const maxAbs = Math.max(1e-6, Math.abs(minV), Math.abs(maxV));
+					const scale = state.graphColorScale || { displayMin: 0, displayMax: 1, maxAbs: 1 };
+					const maxAbs = Math.max(1e-6,
+						Number.isFinite(scale.maxAbs) ? scale.maxAbs : 1,
+						Math.abs(Number.isFinite(scale.displayMin) ? scale.displayMin : 0),
+						Math.abs(Number.isFinite(scale.displayMax) ? scale.displayMax : 1));
 					const signed = clamp(displayV / maxAbs, -1, 1);
 					const hue = 60 + 60 * signed;
 					return `hsl(${hue}, 85%, 42%)`;
@@ -6764,7 +6873,7 @@ export class CircuitApp {
 						? state.wireLabelValueBySegmentIndex
 						: {};
 					const hasWireLabelCache = Object.keys(wireLabelCache).length > 0;
-					const shouldBuildNodePotentialCache = hasWireLabelCache || wireResistanceLabelsEnabled() || state.potentialGraphMode;
+					const shouldBuildNodePotentialCache = hasWireLabelCache || wireResistanceLabelsEnabled() || state.potentialGraphMode || state.voltageColorMode;
 					if (shouldBuildNodePotentialCache) {
 					const wireLabelSegments = routeGraph && Array.isArray(routeGraph.segments)
 						? routeGraph.segments
@@ -7055,15 +7164,6 @@ export class CircuitApp {
 							for (const id of comp) {
 								if (!out.has(id)) out.set(id, 0);
 							}
-							let compMin = Infinity;
-							for (const id of comp) {
-								const value = out.get(id);
-								if (Number.isFinite(value) && value < compMin) compMin = value;
-							}
-							if (Number.isFinite(compMin) && compMin < 0) {
-								const lift = -compMin;
-								for (const id of comp) out.set(id, out.get(id) + lift);
-							}
 						}
 						return out;
 					};
@@ -7103,6 +7203,16 @@ export class CircuitApp {
 						}
 						if (!Number.isFinite(potential)) continue;
 						nodePotentialByKey[node.key] = potential;
+					}
+					const finiteNodePotentials = Array.from(nodePotentialById.values()).filter((v) => Number.isFinite(v));
+					const displayShift = finiteNodePotentials.length ? Math.min(...finiteNodePotentials) : 0;
+					if (Number.isFinite(displayShift) && Math.abs(displayShift) > 1e-12) {
+						for (const [nodeId, value] of nodePotentialById.entries()) {
+							if (Number.isFinite(value)) nodePotentialById.set(nodeId, value - displayShift);
+						}
+						for (const [key, value] of Object.entries(nodePotentialByKey)) {
+							if (Number.isFinite(value)) nodePotentialByKey[key] = value - displayShift;
+						}
 					}
 					state.wireLabelNodePotentialByKey = nodePotentialByKey;
 					const nodeConnectionHeader = `Node connections: ${nodeConnectionMap.size}`;
@@ -7261,6 +7371,7 @@ export class CircuitApp {
 					rebuildLayout();
 				}
 				const layout = state.layout;
+				updateGraphColorScale(layout);
 				wireLabelCounter2D = 0;
 				wireResistanceLabelQueue.length = 0;
 				sliderHitAreas.length = 0;
@@ -7557,10 +7668,9 @@ export class CircuitApp {
 						graphDragState.active = true;
 						graphDragState.mode = isRightButton ? "rotate" : (evt.shiftKey ? "tilt" : "pan");
 						if (isRightButton && state.layout) {
-							const graphCenterX = (state.layout.circuitRight + state.layout.w) * 0.5 + state.graphPanX;
-							const graphCenterY = state.layout.midY + state.graphPanY;
-							const vx = pos.x - graphCenterX;
-							const vy = pos.y - graphCenterY;
+							const graphCenter = getGraphCenter(state.layout);
+							const vx = pos.x - graphCenter.x;
+							const vy = pos.y - graphCenter.y;
 							graphDragState.rotateLastRadius = Math.hypot(vx, vy);
 							graphDragState.rotateLastAngle = Math.atan2(vy, vx);
 						}
@@ -7650,10 +7760,9 @@ export class CircuitApp {
 						const dy = pos.y - graphDragState.lastY;
 						if (graphDragState.mode === "rotate") {
 							if (state.layout) {
-								const graphCenterX = (state.layout.circuitRight + state.layout.w) * 0.5 + state.graphPanX;
-								const graphCenterY = state.layout.midY + state.graphPanY;
-								const vx = pos.x - graphCenterX;
-								const vy = pos.y - graphCenterY;
+								const graphCenter = getGraphCenter(state.layout);
+								const vx = pos.x - graphCenter.x;
+								const vy = pos.y - graphCenter.y;
 								const radius = Math.hypot(vx, vy);
 								const angle = Math.atan2(vy, vx);
 								const minOrbitRadius = 8;
@@ -7832,8 +7941,9 @@ export class CircuitApp {
 					}
 					const anchorX = (rawX - state.viewPanX) / state.viewZoom;
 					const anchorY = (rawY - state.viewPanY) / state.viewZoom;
-					const graphCenterX = (state.layout.circuitRight + state.layout.w) * 0.5;
-					const graphCenterY = state.layout.midY;
+					const graphCenter = getGraphBaseCenter(state.layout);
+					const graphCenterX = graphCenter.x;
+					const graphCenterY = graphCenter.y;
 					const oldOriginX = graphCenterX + state.graphPanX;
 					const oldOriginY = graphCenterY + state.graphPanY;
 					const ratio = newZoom / oldZoom;
@@ -8032,9 +8142,9 @@ export class CircuitApp {
 					potentialGraphCheck.addEventListener("input", () => {
 						state.potentialGraphMode = potentialGraphCheck.checked;
 						if (state.potentialGraphMode) {
-							state.viewZoom = 1;
-							state.viewPanX = 0;
-							state.viewPanY = 0;
+						// Auto-enable voltage color mode when graph is turned on
+						state.voltageColorMode = true;
+						voltageColorCheck.checked = true;
 							autoFitCircuitViewToCanvas();
 						}
 						resetGraphZoomToFit();
