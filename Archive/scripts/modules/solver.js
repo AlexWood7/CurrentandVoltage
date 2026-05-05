@@ -24,7 +24,6 @@ CELL_PADDING,
 END_BUS_CONNECTOR
 } = deps;
 const state = circuitState;
-			const MAIN_SWITCH_ID = "MAIN_SWITCH";
 			class CircuitSolver {
 				constructor(circuitState, onLegendUpdate) {
 					this.state = circuitState;
@@ -396,7 +395,7 @@ const state = circuitState;
 					const layout = this.getSolveLayout();
 					if (!layout) return this.estimateMainSwitchWireResistance();
 					const topLeftLen = Math.max(0, (layout.xSwitch - 16) - layout.xCell);
-					const bladeLen = isComponentSwitchClosed(MAIN_SWITCH_ID) ? 32 : Math.hypot(30, 14);
+					const bladeLen = state.switchClosed ? 32 : Math.hypot(30, 14);
 					const topBusEndX = this.resolveTopBusEndX(layout);
 					const topRightLen = Math.max(0, topBusEndX - (layout.xSwitch + 16));
 					return Math.max(1e-12, (topLeftLen + bladeLen + topRightLen) * SHORT_WIRE_R_PER_PIXEL);
@@ -827,7 +826,7 @@ const state = circuitState;
 						kind: "switch",
 						from: "A",
 						to: "N0",
-						R: isComponentSwitchClosed(MAIN_SWITCH_ID)
+						R: this.state.switchClosed
 								? (includeWireR
 									? this.estimateMainSwitchPathWireResistance()
 									: (this.state.useShortSwitchWireResistance ? this.estimateMainSwitchWireResistance() : 0))
@@ -1141,6 +1140,18 @@ const state = circuitState;
 			solve() {
 					this.state.useShortSwitchWireResistance = false;
 
+					// When the main switch is open, skip the matrix solver entirely.
+					// The matrix models open switch as SWITCH_OPEN_RESISTANCE (1 GΩ) which
+					// produces a tiny but non-zero leakage current. Use the dedicated
+					// open-switch solution so Itotal and all component currents are exactly zero.
+					if (!this.state.switchClosed) {
+						const openSolved = this.buildOpenSwitchSolution();
+						this.state.solved = this.finalizeSolvedSolution(openSolved || this.buildSingularMatrixDiagnosticSolution());
+						this.state.solved.wireResistanceDiagnostic = this.buildWireResistanceDiagnostic(this.state.solved);
+						this.onLegendUpdate();
+						return;
+					}
+
 					let matrixSolved = this.solveWithKirchhoffMatrix(true);
 					if (matrixSolved) {
 						let solved = this.finalizeSolvedSolution(matrixSolved);
@@ -1151,10 +1162,14 @@ const state = circuitState;
 					}
 
 					let fallbackSolved = null;
-					const stageEquivalents = this.state.stages.map((stage) => this.stageEquivalent(stage));
-					const leftModel = this.branchModel(this.state.leftSeries || []);
-					const netEmf = stageEquivalents.reduce((sum, stageEq) => sum + stageEq.Eeq, 0) - leftModel.E;
-					fallbackSolved = this.buildZeroResistanceSolution(netEmf);
+					if (!this.state.switchClosed) {
+						fallbackSolved = this.buildOpenSwitchSolution();
+					} else {
+						const stageEquivalents = this.state.stages.map((stage) => this.stageEquivalent(stage));
+						const leftModel = this.branchModel(this.state.leftSeries || []);
+						const netEmf = stageEquivalents.reduce((sum, stageEq) => sum + stageEq.Eeq, 0) - leftModel.E;
+						fallbackSolved = this.buildZeroResistanceSolution(netEmf);
+						}
 
 
 						this.state.solved = this.finalizeSolvedSolution(fallbackSolved || this.buildSingularMatrixDiagnosticSolution());

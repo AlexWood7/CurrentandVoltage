@@ -33,7 +33,6 @@ export function createKirchhoffSolver(deps) {
 			let totalR = 0;
 			let totalE = 0;
 			const seenComp = new Set();
-			const seenSwitchBlade = new Set();
 			for (const seg of allSegs) {
 				if (!seg) continue;
 				if (!Number.isFinite(seg.x1) || !Number.isFinite(seg.y1) || !Number.isFinite(seg.x2) || !Number.isFinite(seg.y2)) continue;
@@ -62,15 +61,9 @@ export function createKirchhoffSolver(deps) {
 					}
 					continue;
 				}
-				if (seg.componentId && seg.role === "switch-blade") {
-					if (seenSwitchBlade.has(seg.componentId)) continue;
-					seenSwitchBlade.add(seg.componentId);
-					if (isComponentSwitchClosed(seg.componentId)) {
-						const bladeLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
-						totalR += Math.max(0, bladeLen * SHORT_WIRE_R_PER_PIXEL);
-					} else {
-						totalR += Math.max(0, componentIntrinsicResistance(seg.componentId));
-					}
+				if (seg.componentId && seg.role === "switch-blade" && isComponentSwitchClosed(seg.componentId)) {
+					const bladeLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+					totalR += Math.max(0, bladeLen * SHORT_WIRE_R_PER_PIXEL);
 					continue;
 				}
 			}

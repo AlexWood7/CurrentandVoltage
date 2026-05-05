@@ -1,15 +1,501 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Circuits Visualised</title>
+	<style>
+		:root {
+			--bg: #e5e5e5;
+			--panel: rgba(255, 255, 255, 0.95);
+			--border: #9e9e9e;
+			--canvas: #ffffff;
+			--text: #333;
+			--focus: #4a90e2;
+			--wire: #222;
+			--wire-soft: #5f6b7a;
+		}
 
-import { resistorDefs, EXTRA_CELL_IDS, EXTRA_SWITCH_IDS, graphOrientationDefaults, GRAPH_VOLTS_TO_HEIGHT, GRAPH_XY_SCALE_BASE, GRAPH_VERTICAL_MARGIN, GRAPH_AUTO_FIT_SCALE, GRAPH_MIN_AUTO_ZOOM, GRAPH_CIRCUIT_MARGIN, GRAPH_SIDE_MARGIN, GRAPH_PATH_HALF_WIDTH, CONNECTOR_WIRE, BUS_CONNECTOR, END_BUS_CONNECTOR, MAX_PARALLEL_BRANCHES, EMF_BODY_HEIGHT, CELL_PADDING, RES_W, RES_H, RE_LEAD_TOP, RES_LEAD_BOTTOM, RES_PITCH, SERIES_LEAD_BOTTOM, SERIES_PITCH, PARALLEL_GAP, INSERT_RAIL_DIST, STAGE_GAP, PARALLEL_MULTI_STAGE_LEAD_TOP_BOOST, PARALLEL_MULTI_STAGE_LEAD_BOTTOM_BOOST, PARALLEL_PAIR_STAGE_GAP_BOOST, INTERNAL_R_HEIGHT_EXTRA, SINGLE_RESISTOR_INTERNAL_MIN_HEIGHT, NO_INTERNAL_TOP_LAYOUT_GAP_BOOST, COMPONENT_RAMP_OVERSHOOT, INTERNAL_COMBO_CENTER_OFFSET, RESISTOR_VALUE_MIN, RESISTOR_VALUE_MAX, SHORT_WIRE_R_PER_PIXEL, SHORT_CIRCUIT_CURRENT_THRESHOLD_A, HIGH_CURRENT_WARNING_THRESHOLD_A, GRAPH_COMPONENT_MIN_WIDTH_FACTOR, SWITCH_OPEN_RESISTANCE, PRIMARY_CELL_ID, CELL2_ID } from "./modules/constants.js";
-import { createInitialState } from "./modules/state.js";
-import { CircuitLayoutEngine } from "./modules/layout.js";
-import { createCircuitSolver } from "./modules/solver.js";
-import { createKirchhoffSolver } from "./modules/kirchhoff-solver.js";
+		* {
+			box-sizing: border-box;
+		}
 
-export class CircuitApp {
+		html,
+		body {
+			margin: 0;
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			background: var(--bg);
+			font-family: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+			color: var(--text);
+		}
+
+		#app {
+			position: relative;
+			width: 100%;
+			height: 100%;
+			padding: 0;
+			background: radial-gradient(circle at 15% 10%, #f1f1f1 0%, #e5e5e5 45%, #dddddd 100%);
+		}
+
+		.topbar {
+			position: absolute;
+			top: 8px;
+			left: 50%;
+			transform: translateX(-50%);
+			width: 97.5%;
+			max-width: 1150px;
+			border: 2px solid var(--border);
+			border-radius: 8px;
+			background: var(--panel);
+			backdrop-filter: blur(8px);
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+			padding: 12px 16px;
+			z-index: 10;
+		}
+
+		.topbar-row {
+			display: grid;
+			grid-template-columns: auto 1fr auto;
+			grid-template-areas: "left center right";
+			align-items: center;
+			gap: 10px 12px;
+		}
+
+		.title {
+			grid-area: left;
+			font-size: 20px;
+			font-weight: 600;
+			white-space: nowrap;
+		}
+
+		.controls {
+			grid-area: center;
+			display: flex;
+			flex-wrap: nowrap;
+			justify-content: center;
+			align-items: center;
+			gap: 8px;
+			min-height: 24px;
+		}
+
+		.chip {
+			display: inline-flex;
+			align-items: center;
+			gap: 8px;
+			padding: 4px 8px;
+			border: 1px solid #d4d7db;
+			border-radius: 6px;
+			background: #f6f7f8;
+			font-size: 12px;
+			font-weight: 600;
+		}
+
+		.chip input[type="checkbox"] {
+			margin: 0;
+			accent-color: var(--focus);
+		}
+
+		.chip input[type="number"] {
+			width: 56px;
+			padding: 2px 4px;
+			border: 1px solid #c8ced7;
+			border-radius: 4px;
+			font-size: 12px;
+			font-weight: 600;
+			background: #fff;
+			color: #334;
+		}
+
+		.legend {
+			display: none;
+			font-size: 12px;
+			font-weight: 600;
+			text-align: center;
+			color: #495567;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			max-width: 100%;
+		}
+
+		.topbar-right {
+			grid-area: right;
+			justify-self: end;
+			font-size: 14px;
+			font-weight: 600;
+			color: #333;
+			white-space: nowrap;
+		}
+
+		.canvas-wrap {
+			position: absolute;
+			top: 0;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			border: 0;
+			background: var(--canvas);
+			overflow: hidden;
+		}
+
+		.side-menu-toggle {
+			position: absolute;
+			right: 0;
+			top: 90px;
+			width: 50px;
+			height: 50px;
+			background: rgba(255, 255, 255, 0.85);
+			border: 2px solid var(--border);
+			border-right: none;
+			border-radius: 8px 0 0 8px;
+			cursor: pointer;
+			z-index: 18;
+			box-shadow: -2px 2px 8px rgba(0, 0, 0, 0.15);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+			font-size: 11px;
+			font-weight: 700;
+			color: #333;
+			text-transform: uppercase;
+			letter-spacing: 0.06em;
+		}
+
+		.side-menu-toggle:hover {
+			background: rgba(255, 255, 255, 0.95);
+			box-shadow: -2px 4px 12px rgba(0, 0, 0, 0.25);
+		}
+
+		.side-menu-toggle.menu-open {
+			opacity: 0;
+			pointer-events: none;
+		}
+
+		.side-menu {
+			position: absolute;
+			right: 0;
+			top: 90px;
+			background: rgba(255, 255, 255, 0.75);
+			border: 2px solid var(--border);
+			border-right: none;
+			border-radius: 8px 0 0 8px;
+			box-shadow: -4px 4px 16px rgba(0, 0, 0, 0.2);
+			padding: 16px;
+			z-index: 17;
+			width: 240px;
+			max-height: calc(100% - 110px);
+			overflow-y: auto;
+			transition: opacity 0.3s ease, transform 0.3s ease;
+		}
+
+		.side-menu.hidden {
+			opacity: 0;
+			pointer-events: none;
+			transform: translateX(20px);
+		}
+
+		.side-menu-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			margin-bottom: 12px;
+			padding-bottom: 8px;
+			border-bottom: 1px solid #e0e0e0;
+		}
+
+		.side-menu-header h3 {
+			margin: 0;
+			font-size: 14px;
+			font-weight: 600;
+			color: #333;
+		}
+
+		.side-menu-close {
+			width: 32px;
+			height: 32px;
+			background: transparent;
+			border: none;
+			cursor: pointer;
+			font-size: 32px;
+			line-height: 1;
+			padding: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: #666;
+			transition: all 0.2s;
+			flex-shrink: 0;
+			margin-top: -2px;
+		}
+
+		.side-menu-close:hover {
+			background: rgba(0, 0, 0, 0.05);
+			color: #333;
+			border-radius: 4px;
+		}
+
+		.side-menu-controls {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+
+		.side-menu::-webkit-scrollbar {
+			width: 8px;
+		}
+
+		.side-menu::-webkit-scrollbar-track {
+			background: rgba(0, 0, 0, 0.05);
+			border-radius: 4px;
+		}
+
+		.side-menu::-webkit-scrollbar-thumb {
+			background: rgba(0, 0, 0, 0.2);
+			border-radius: 4px;
+		}
+
+		.side-menu::-webkit-scrollbar-thumb:hover {
+			background: rgba(0, 0, 0, 0.3);
+		}
+
+		.component-menu-toggle {
+			position: absolute;
+			left: 50%;
+			bottom: 0;
+			transform: translateX(-50%);
+			width: auto;
+			padding: 8px 16px;
+			height: auto;
+			border: 2px solid var(--border);
+			border-bottom: none;
+			border-radius: 8px 8px 0 0;
+			background: rgba(255, 255, 255, 0.85);
+			color: #333;
+			font-size: 13px;
+			font-weight: 600;
+			cursor: pointer;
+			box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			white-space: nowrap;
+			z-index: 16;
+		}
+
+		.component-menu-toggle:hover {
+			background: rgba(255, 255, 255, 0.95);
+			box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
+		}
+
+		.component-menu-toggle.menu-open {
+			opacity: 0;
+			pointer-events: none;
+		}
+
+		.component-menu {
+			position: absolute;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			padding: 0;
+			border-top: 2px solid var(--border);
+			background: rgba(230, 230, 230, 0.25);
+			box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.2);
+			z-index: 15;
+			max-height: calc(100% - 140px);
+			overflow: visible;
+			transition: transform 0.25s ease, opacity 0.25s ease;
+		}
+
+		.component-menu-body {
+			max-height: 100%;
+			overflow-x: hidden;
+			overflow-y: auto;
+			padding: 0 16px 16px 16px;
+		}
+
+		.component-menu.hidden {
+			opacity: 0;
+			pointer-events: none;
+			transform: translateY(16px);
+		}
+
+		.component-menu-header {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 12px;
+			width: fit-content;
+			position: absolute;
+			top: -2px;
+			left: 50%;
+			transform: translate(-50%, -100%);
+			padding: 6px 16px;
+			background: rgba(255, 255, 255, 0.9);
+			border: 2px solid var(--border);
+			border-bottom: none;
+			border-radius: 8px 8px 0 0;
+			z-index: 17;
+		}
+
+		.component-menu-title {
+			font-size: 13px;
+			font-weight: 600;
+			color: #333;
+		}
+
+		.component-menu-close {
+			width: auto;
+			height: auto;
+			background: transparent;
+			border: none;
+			cursor: pointer;
+			font-size: 32px;
+			line-height: 1;
+			padding: 0;
+			margin: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: #666;
+			transition: all 0.2s;
+			transform: rotate(90deg);
+		}
+
+		.component-menu-close:hover {
+			background: rgba(0, 0, 0, 0.05);
+			color: #333;
+			border-radius: 4px;
+		}
+
+		.component-row:first-of-type {
+			padding-top: 44px;
+		}
+
+		.component-row {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin-bottom: 8px;
+		}
+
+		.component-row:last-child {
+			margin-bottom: 0;
+		}
+
+		.component-menu-body::-webkit-scrollbar {
+			width: 8px;
+		}
+
+		.component-menu-body::-webkit-scrollbar-track {
+			background: rgba(0, 0, 0, 0.05);
+			border-radius: 4px;
+		}
+
+		.component-menu-body::-webkit-scrollbar-thumb {
+			background: rgba(0, 0, 0, 0.2);
+			border-radius: 4px;
+		}
+
+		.component-menu-body::-webkit-scrollbar-thumb:hover {
+			background: rgba(0, 0, 0, 0.3);
+		}
+
+		canvas {
+			width: 100%;
+			height: 100%;
+			display: block;
+			touch-action: none;
+		}
+
+		@media (max-width: 980px) {
+			.topbar-row {
+				grid-template-columns: 1fr auto;
+				grid-template-areas:
+					"left right"
+					"center center";
+			}
+
+			.title,
+			.topbar-right,
+			.legend {
+				text-align: center;
+			}
+
+			.topbar-right {
+				justify-self: center;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div id="app">
+		<div class="topbar" id="topbar">
+			<div class="topbar-row">
+				<div class="title">Circuits Visualised</div>
+				<div class="controls"><div class="legend" id="legend"></div></div>
+				<div class="topbar-right">A Wood</div>
+			</div>
+		</div>
+		<div class="canvas-wrap" id="canvasWrap">
+			<canvas id="scene"></canvas>
+		</div>
+		<button class="side-menu-toggle" id="sideMenuToggle" type="button" title="Display Controls">View</button>
+		<div class="side-menu hidden" id="sideMenu">
+			<div class="side-menu-header">
+				<h3>Display controls</h3>
+				<button class="side-menu-close" id="sideMenuClose" type="button" title="Close" aria-label="Close display menu">&#8250;</button>
+			</div>
+			<div class="side-menu-controls">
+				<label class="chip"><input id="voltageColor" type="checkbox" /> <span>Voltage colour code</span></label>
+				<label class="chip" id="potentialGraphChip"><input id="potentialGraph" type="checkbox" /> <span>Potential graph</span></label>
+				<label class="chip"><input id="invertVoltageAxis" type="checkbox" checked /> <span>Invert voltage axis</span></label>
+				<label class="chip"><input id="wireResistanceSolve" type="checkbox" /> <span>Wire resistance (solve)</span></label>
+				<label class="chip"><input id="debugLabels" type="checkbox" /> <span>Debug labels</span></label>
+				<label class="chip"><input id="debugJunctionIds" type="checkbox" /> <span>Junction IDs</span></label>
+				<label class="chip"><input id="debugNodePotentials" type="checkbox" /> <span>Node potentials</span></label>
+				<label class="chip"><input id="wireResLabels" type="checkbox" /> <span>Wire R &amp; V labels</span></label>
+				<label class="chip"><input id="shortRouteOverlay" type="checkbox" checked /> <span>Short route highlight</span></label>
+			</div>
+		</div>
+		<button class="component-menu-toggle" id="componentMenuToggle" type="button">Component controls</button>
+		<div class="component-menu hidden" id="componentMenu">
+			<div class="component-menu-header">
+				<div class="component-menu-title">Component Controls</div>
+				<button class="component-menu-close" id="componentMenuClose" type="button" title="Close" aria-label="Close component menu">&#8250;</button>
+			</div>
+			<div class="component-menu-body">
+				<div class="component-row">
+					<label class="chip"><input id="intR" type="checkbox" /> <span>Internal r</span></label>
+					<label class="chip"><input id="cell1" type="checkbox" checked /> <span>Cell1</span></label>
+					<label class="chip"><input id="cell2" type="checkbox" /> <span>Cell2</span></label>
+					<label class="chip"><input id="cell3" type="checkbox" /> <span>Cell3</span></label>
+					<label class="chip"><input id="cell4" type="checkbox" /> <span>Cell4</span></label>
+				</div>
+				<div class="component-row">
+					<label class="chip"><input id="R1" type="checkbox" checked /> <span>R1</span><input id="R1box" type="number" min="0.1" max="10" step="0.1" value="2.5" /><span>&#x03A9;</span></label>
+					<label class="chip"><input id="R2" type="checkbox" /> <span>R2</span><input id="R2box" type="number" min="0.1" max="10" step="0.1" value="5.0" /><span>&#x03A9;</span></label>
+					<label class="chip"><input id="R3" type="checkbox" /> <span>R3</span><input id="R3box" type="number" min="0.1" max="10" step="0.1" value="7.5" /><span>&#x03A9;</span></label>
+					<label class="chip"><input id="R4" type="checkbox" /> <span>R4</span><input id="R4box" type="number" min="0.1" max="10" step="0.1" value="10.0" /><span>&#x03A9;</span></label>
+				</div>
+				<div class="component-row">
+					<label class="chip"><input id="s1" type="checkbox" /> <span>S1</span></label>
+					<label class="chip"><input id="s2" type="checkbox" /> <span>S2</span></label>
+					<label class="chip"><input id="s3" type="checkbox" /> <span>S3</span></label>
+					<label class="chip"><input id="s4" type="checkbox" /> <span>S4</span></label>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		class CircuitApp {
 			constructor() {
 			const app = document.getElementById("app");
 			const topbar = document.getElementById("topbar");
-			const highCurrentWarning = document.getElementById("highCurrentWarning");
 			const canvasWrap = document.getElementById("canvasWrap");
 			const canvas = document.getElementById("scene");
 			const ctx = canvas.getContext("2d");
@@ -37,28 +523,20 @@ export class CircuitApp {
 			const voltageColorCheck = document.getElementById("voltageColor");
 			const potentialGraphCheck = document.getElementById("potentialGraph");
 			const invertVoltageAxisCheck = document.getElementById("invertVoltageAxis");
-			const debugModeCheck = document.getElementById("debugMode");
-			const debugControlsGroup = document.getElementById("debugControlsGroup");
+			const wireResistanceSolveCheck = document.getElementById("wireResistanceSolve");
 			const debugLabelsCheck = document.getElementById("debugLabels");
 			const debugJunctionIdsCheck = document.getElementById("debugJunctionIds");
 			const debugNodePotentialsCheck = document.getElementById("debugNodePotentials");
 			const wireResLabelsCheck = document.getElementById("wireResLabels");
+			const shortRouteOverlayCheck = document.getElementById("shortRouteOverlay");
 			const potentialGraphChip = document.getElementById("potentialGraphChip");
 			const rValueInputs = Object.fromEntries(resistorDefs.map((r) => [r.id, document.getElementById(r.id + "box")]));
 			const sliderHitAreas = [];
 			const actionHitAreas = [];
 			const wireResistanceLabelQueue = [];
 			const sliderDragState = { active: false, paramKey: null };
-			const graphDragState = {
-				active: false,
-				lastX: 0,
-				lastY: 0,
-				mode: "pan",
-				rotateLastAngle: NaN,
-				rotateLastRadius: 0
-			};
+			const graphDragState = { active: false, lastX: 0, lastY: 0, mode: "pan" };
 			const viewDragState = { active: false, lastRawX: 0, lastRawY: 0 };
-			const mainSwitchTapState = { active: false, moved: false, tapStartX: 0, tapStartY: 0, tapThreshold: 4 };
 			const touchState = { active: false, isOverGraph: false, lastDistance: 0, firstTouchId: null };
 			let wireLabelCounter2D = 0;
 
@@ -71,11 +549,10 @@ export class CircuitApp {
 			const GRAPH_XY_SCALE_BASE = 1;
 			const GRAPH_VERTICAL_MARGIN = 36;
 			const GRAPH_AUTO_FIT_SCALE = 0.92;
-			const GRAPH_MIN_AUTO_ZOOM = 0.35;
+			const GRAPH_MIN_AUTO_ZOOM = 1;
 			const GRAPH_CIRCUIT_MARGIN = 40;
 			const GRAPH_SIDE_MARGIN = 12;
 			const GRAPH_PATH_HALF_WIDTH = 18;
-			const GRAPH_INTERACTION_MARGIN = 18;
 			const CONNECTOR_WIRE = 18.5;
 			const BUS_CONNECTOR = 18.5;
 			const END_BUS_CONNECTOR = 18.5;
@@ -91,32 +568,32 @@ export class CircuitApp {
 				layout: null,
 				graphTrackGeometry: null,
 				drag: null,
+				switchClosed: true,
 				internalR: false,
 				voltageColorMode: false,
 				potentialGraphMode: false,
 				invertVoltageAxis: true,
-				debugMode: false,
+				useWireResistanceInSolve: false,
 				debugLabels: false,
 				debugJunctionIds: false,
 				debugNodePotentials: false,
 				wireResistanceLabels: false,
+				shortRouteOverlay: true,
 				sectionColorByPairKey: {},
-				sectionHighCurrentPairGeometries: [],
 				wireLabelNodePairRows: [],
 				graphAzimuth: graphOrientationDefaults.azimuth,
 				graphElevation: graphOrientationDefaults.elevation,
 				graphRoll: graphOrientationDefaults.roll,
-				graphZoom: 1,
+				graphZoom: 1.41,
 				graphPanX: 0,
 				graphPanY: 0,
 				viewZoom: 1,
 				viewPanX: 0,
 				viewPanY: 0,
-				graphColorScale: { displayMin: 0, displayMax: 1, maxAbs: 1 },
 				cellEmfById: { Cell1: 6, Cell2: 6, Cell3: 6, Cell4: 6 },
 				cellPolarityById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
 				cellRInternalById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
-				switchClosedById: { MAIN_SWITCH: true, S1: true, S2: true, S3: true, S4: true },
+				switchClosedById: { S1: true, S2: true, S3: true, S4: true },
 				useShortSwitchWireResistance: false,
 				resistorValues: { R1: 2.5, R2: 5.0, R3: 7.5, R4: 10.0 },
 				solved: { byId: {}, Itotal: 0, stageNodeV: [0], Vext: 0, switchVLeft: 0, switchVRight: 0, cellTopPlateV: 0, vMin: 0, vMax: 1 }
@@ -144,6 +621,9 @@ export class CircuitApp {
 			const RESISTOR_VALUE_MAX = 10;
 			const SHORT_WIRE_R_PER_PIXEL = 0.000000001;
 			const SHORT_CIRCUIT_CURRENT_THRESHOLD_A = 5;
+			const SHORT_BEHAVIOUR_VISUAL_CURRENT_A = 1e5;
+			const USE_LARGE_CURRENT_SHORT_CLASSIFICATION = false;
+			const ENABLE_LEGACY_SHORT_CIRCUIT_LISTENER = false;
 			const GRAPH_COMPONENT_MIN_WIDTH_FACTOR = 0.10;
 			const SWITCH_OPEN_RESISTANCE = 1e9;
 			const PRIMARY_CELL_ID = "Cell1";
@@ -152,7 +632,6 @@ export class CircuitApp {
 			const CELL_R_INTERNAL_KEYS = Object.fromEntries(EXTRA_CELL_IDS.map((id) => [id, id + "_rInternal"]));
 			const CELL_EMF_SLIDER_KEYS = Object.fromEntries(EXTRA_CELL_IDS.map((id) => [id, id.toUpperCase() + "_EMF"]));
 			const COMPONENT_SWITCH_TOGGLE_KEYS = Object.fromEntries(EXTRA_SWITCH_IDS.map((id) => [id, id + "_TOGGLE"]));
-			const MAIN_SWITCH_ID = "MAIN_SWITCH";
 
 			function clamp(v, min, max) {
 				return Math.max(min, Math.min(max, v));
@@ -162,54 +641,7 @@ export class CircuitApp {
 				return current === Infinity || current === -Infinity;
 			}
 
-			function getGraphBaseCenter(layout) {
-				if (!layout) return { x: 0, y: 0 };
-				if (state.potentialGraphMode) {
-					const circuitRightScreenX = layout.circuitRight * state.viewZoom + state.viewPanX;
-					const targetScreenX = (circuitRightScreenX + layout.w) * 0.5;
-					const targetScreenY = layout.midY;
-					const logicalX = (targetScreenX - state.viewPanX) / Math.max(1e-6, state.viewZoom);
-					const logicalY = (targetScreenY - state.viewPanY) / Math.max(1e-6, state.viewZoom);
-					return { x: logicalX, y: logicalY };
-				}
-				return {
-					x: (layout.circuitRight + layout.w) * 0.5,
-					y: layout.midY
-				};
-			}
-
-			function getGraphCenter(layout) {
-				const base = getGraphBaseCenter(layout);
-				return {
-					x: base.x + state.graphPanX,
-					y: base.y + state.graphPanY
-				};
-			}
-
 			function isShortCircuitCurrentValue(current) {
-				return false;
-			}
-
-			function getGraphInteractionBounds(layout) {
-				if (!layout) return null;
-				const projected = computeProjectedGraphBoundsImpl(layout, state.graphZoom);
-				if (!projected) return null;
-				const graphCenter = getGraphCenter(layout);
-				return {
-					left: graphCenter.x + projected.minX,
-					right: graphCenter.x + projected.maxX,
-					top: graphCenter.y + projected.minY,
-					bottom: graphCenter.y + projected.maxY
-				};
-			}
-
-			function isHighCurrentWarning(solution) {
-				if (!solution) return false;
-				if (Math.abs(solution.Itotal) > HIGH_CURRENT_WARNING_THRESHOLD_A) return true;
-				const byId = solution.byId || {};
-				for (const reading of Object.values(byId)) {
-					if (reading && Number.isFinite(reading.I) && Math.abs(reading.I) > HIGH_CURRENT_WARNING_THRESHOLD_A) return true;
-				}
 				return false;
 			}
 
@@ -239,6 +671,10 @@ export class CircuitApp {
 				return false;
 			}
 
+			function solutionShouldUseShortBehaviour(solution) {
+				return false;
+			}
+
 			function enabledIds() {
 				const ids = resistorDefs.filter((r) => ui[r.id].checked).map((r) => r.id);
 				for (const id of EXTRA_CELL_IDS) {
@@ -262,29 +698,9 @@ export class CircuitApp {
 				return EXTRA_SWITCH_IDS.includes(id);
 			}
 
-			function isCircuitSwitch(id) {
-				return id === MAIN_SWITCH_ID || isBranchSwitch(id);
-			}
-
 			function getCellEmf(id) {
 				const v = state.cellEmfById[id];
 				return Number.isFinite(v) ? v : 6;
-			}
-
-			function setDebugControlsVisible(enabled) {
-				state.debugMode = !!enabled;
-				if (debugControlsGroup) {
-					debugControlsGroup.hidden = !enabled;
-				}
-				if (enabled) return;
-				if (debugLabelsCheck) debugLabelsCheck.checked = false;
-				if (debugJunctionIdsCheck) debugJunctionIdsCheck.checked = false;
-				if (debugNodePotentialsCheck) debugNodePotentialsCheck.checked = false;
-				if (wireResLabelsCheck) wireResLabelsCheck.checked = false;
-				state.debugLabels = false;
-				state.debugJunctionIds = false;
-				state.debugNodePotentials = false;
-				state.wireResistanceLabels = false;
 			}
 
 			function getCellPolarity(id) {
@@ -321,14 +737,9 @@ export class CircuitApp {
 			}
 
 			function isComponentSwitchClosed(id) {
-				if (!isCircuitSwitch(id)) return true;
+				if (!isBranchSwitch(id)) return true;
 				const v = state.switchClosedById[id];
 				return v !== false;
-			}
-
-			function setComponentSwitchClosed(id, closed) {
-				if (!isCircuitSwitch(id)) return;
-				state.switchClosedById[id] = closed !== false;
 			}
 
 			function isOpenBranchSwitch(id) {
@@ -338,10 +749,7 @@ export class CircuitApp {
 			function isNodeToOpenSwitchVoltageSegment(seg) {
 				return !!(seg
 					&& seg.role === "switch-open-node-wire"
-					&& (
-						isOpenBranchSwitch(seg.componentId)
-						|| (seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
-					));
+					&& isOpenBranchSwitch(seg.componentId));
 			}
 
 			function shouldParticipateInSecondarySolveSegment(seg) {
@@ -390,9 +798,9 @@ export class CircuitApp {
 
 			function componentResistance(id) {
 				if (isExtraCell(id)) return state.internalR ? getCellRInternal(id) : 0;
-				if (isCircuitSwitch(id)) {
+				if (isBranchSwitch(id)) {
 					if (!isComponentSwitchClosed(id)) return SWITCH_OPEN_RESISTANCE;
-					return state.useShortSwitchWireResistance
+					return (state.useShortSwitchWireResistance || state.useWireResistanceInSolve)
 						? closedSwitchWireResistance(id)
 						: 0;
 				}
@@ -401,7 +809,7 @@ export class CircuitApp {
 
 			function componentIntrinsicResistance(id) {
 				if (isExtraCell(id)) return state.internalR ? getCellRInternal(id) : 0;
-				if (isCircuitSwitch(id)) return isComponentSwitchClosed(id) ? 0 : SWITCH_OPEN_RESISTANCE;
+				if (isBranchSwitch(id)) return isComponentSwitchClosed(id) ? 0 : SWITCH_OPEN_RESISTANCE;
 				return resistorValue(id);
 			}
 
@@ -498,7 +906,7 @@ export class CircuitApp {
 							normalized.push({ branches: [[id]] });
 						}
 					} else {
-						// Preserve the branch order that was set by user drag — do not re-sort
+						// Preserve the branch order that was set by user drag â€” do not re-sort
 						normalized.push({
 							branches: nonEmptyBranches.map((branch) => branch.slice())
 						});
@@ -603,21 +1011,9 @@ export class CircuitApp {
 
 			function computeLayoutImpl(w, h) {
 				const midY = h * 0.5;
-				let xCell;
-				let xRight;
-				if (state.potentialGraphMode) {
-					const leftHalfWidth = w * 0.5;
-					const desiredCenter = leftHalfWidth * 0.5;
-					const circuitSpan = 270;
-					const minXCell = 110;
-					const maxXRight = Math.max(minXCell + circuitSpan, leftHalfWidth - 15);
-					xCell = clamp(desiredCenter - circuitSpan * 0.5, minXCell, maxXRight - circuitSpan);
-					xRight = xCell + circuitSpan;
-				} else {
-					const graphShift = 0;
-					xCell = Math.max(110, w * 0.24 - graphShift);
-					xRight = Math.min(w - 110, xCell + 270);
-				}
+				const graphShift = state.potentialGraphMode ? Math.round(w * 0.18) : 0;
+				const xCell = Math.max(110, w * 0.24 - graphShift);
+				const xRight = Math.min(w - 110, xCell + 270);
 				const switchAnchorX = Math.min(xRight - 34, (xCell + xRight) * 0.5 + 26);
 				const xSwitch = (((xCell + 34) + (switchAnchorX - 28)) * 0.5) - 20;
 				const activeStages = state.stages.slice();
@@ -845,7 +1241,7 @@ export class CircuitApp {
 					wireZones,
 					stageInsertZones,
 					leftSeriesInsertZones,
-					switchHit: { left: xSwitch - 22, right: xSwitch + 22, top: yTop - 24, bottom: yTop + 12 }
+					switchHit: { left: xSwitch - 30, right: xSwitch + 30, top: yTop - 24, bottom: yTop + 16 }
 				};
 			}
 
@@ -861,31 +1257,1304 @@ export class CircuitApp {
 				return layoutEngine.computeLayout(w, h);
 			}
 
-			const circuitSolver = createCircuitSolver(state, updateLegendText, {
-				componentResistance,
-				componentIntrinsicResistance,
-				componentEmf,
-				componentBodyHeight,
-				computeLayout,
-				canvas,
-				isExtraCell,
-				getCellRInternal,
-				isBranchSwitch,
-				isComponentSwitchClosed,
-				closedSwitchWireResistance,
-				isShortCircuitCurrentValue,
-				solutionHasInfiniteCurrent,
-				wireResistanceLabelsEnabled,
-				PRIMARY_CELL_ID,
-				SWITCH_OPEN_RESISTANCE,
-				SHORT_WIRE_R_PER_PIXEL,
-				SHORT_CIRCUIT_CURRENT_THRESHOLD_A,
-				CONNECTOR_WIRE,
-				RES_H,
-				EMF_BODY_HEIGHT,
-				CELL_PADDING,
-				END_BUS_CONNECTOR
-			});
+			class CircuitSolver {
+				constructor(circuitState, onLegendUpdate) {
+					this.state = circuitState;
+					this.onLegendUpdate = onLegendUpdate;
+				}
+
+				zeroReadings(emf = 0) {
+					const byId = {};
+					for (const id of this.state.leftSeries) {
+						const R = componentResistance(id);
+						const V = 0 * R - componentEmf(id);
+						byId[id] = { I: 0, V, R, Vtop: emf, Vbottom: emf + V };
+					}
+					for (const stage of this.state.stages) {
+						for (const branch of stage.branches) {
+							for (const id of branch) {
+								const R = componentResistance(id);
+								const V = 0 * R - componentEmf(id);
+								byId[id] = { I: 0, V, R, Vtop: emf, Vbottom: emf + V };
+							}
+						}
+					}
+					return byId;
+				}
+
+				accumulateBranchModel(branch, resistanceFn) {
+					let R = 0;
+					let E = 0;
+					for (const id of (branch || [])) {
+						R += resistanceFn(id);
+						E += componentEmf(id);
+					}
+					return { R, E, effectiveR: Math.max(1e-6, R) };
+				}
+
+				branchModel(branch) {
+					return this.accumulateBranchModel(branch, componentResistance);
+				}
+
+				branchModelIntrinsic(branch) {
+					return this.accumulateBranchModel(branch, componentIntrinsicResistance);
+				}
+
+				writeBranchReadings(byId, branch, current, startV, resistanceFn = componentResistance) {
+					const EPS_R = 1e-9;
+					let vNow = startV;
+					for (const id of (branch || [])) {
+						const R = resistanceFn(id);
+						const IRdrop = Number.isFinite(current) ? (current * R) : (R > EPS_R ? (current * R) : 0);
+						const Vdrop = IRdrop - componentEmf(id);
+						byId[id] = { I: current, V: Vdrop, R, Vtop: vNow, Vbottom: vNow + Vdrop };
+						vNow += Vdrop;
+					}
+					return vNow;
+				}
+
+				computeVoltageBounds(seedValues, byId) {
+					const finiteSeeds = (seedValues || []).filter((v) => Number.isFinite(v));
+					let vMin = finiteSeeds.length ? Math.min(...finiteSeeds) : 0;
+					let vMax = Math.max(1e-6, ...(finiteSeeds.length ? finiteSeeds : [0]));
+					for (const reading of Object.values(byId || {})) {
+						if (!reading) continue;
+						if (Number.isFinite(reading.Vtop)) {
+							vMin = Math.min(vMin, reading.Vtop);
+							vMax = Math.max(vMax, reading.Vtop);
+						}
+						if (Number.isFinite(reading.Vbottom)) {
+							vMin = Math.min(vMin, reading.Vbottom);
+							vMax = Math.max(vMax, reading.Vbottom);
+						}
+					}
+					return { vMin, vMax };
+				}
+
+				solveBranchCurrent(numerator, branchModel) {
+					const EPS_R = 1e-9;
+					const EPS_V = 1e-6;
+					const R = (branchModel && Number.isFinite(branchModel.R)) ? branchModel.R : 0;
+					if (R > EPS_R) return numerator / R;
+					if (Math.abs(numerator) <= EPS_V) return 0;
+					return numerator > 0 ? Infinity : -Infinity;
+				}
+
+				solveStageBranchCurrents(stage, stageEq, Vstage, targetStageCurrent) {
+					const EPS_R = 1e-9;
+					const EPS_V = 1e-6;
+					const branchCurrents = new Array(stage.branches.length).fill(0);
+					const unresolvedZeroRBranches = [];
+					let hasInfiniteCurrent = false;
+					let sumResolvedFinite = 0;
+
+					for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+						const branchModel = stageEq.models[branchIndex];
+						const numerator = Vstage + branchModel.E;
+						const R = Number.isFinite(branchModel.R) ? branchModel.R : 0;
+
+						if (R > EPS_R) {
+							const I = numerator / R;
+							branchCurrents[branchIndex] = I;
+							sumResolvedFinite += I;
+							continue;
+						}
+
+							if (row && row.name === "mainSwitch") {
+								const rowR = Number.isFinite(row.R) ? Math.max(0, row.R) : 0;
+								const rowI = Number.isFinite(row.I) ? row.I : 0;
+								let adjR = rowR;
+								let toLabel = nodeLabel("N0") || "J?";
+								if (stages.length > 0 && Array.isArray(stages[0].branches) && stages[0].branches.length > 1) {
+									const y0 = stageEntryTop(0);
+									if (y0 !== null) {
+										let minX = Infinity;
+										for (const b of stages[0].branches) {
+											if (Number.isFinite(b.x)) minX = Math.min(minX, b.x);
+										}
+										if (Number.isFinite(minX)) {
+											toLabel = registry.labelAt(minX, y0) || toLabel;
+											adjR = Math.max(0, rowR - Math.max(0, layout.xRight - minX) * SHORT_WIRE_R_PER_PIXEL);
+										}
+									}
+								}
+								out.push({
+									...row,
+									name: "mainSwitch_visiblePath",
+									fromDisplayLabel: registry.labelAt(layout.xCell, layout.yTop) || "J?",
+									toDisplayLabel: toLabel,
+									R: adjR,
+									E: 0,
+									dV: Number.isFinite(row.dV) ? row.dV : (rowI * adjR),
+									// Cover the entire top bus (xCell -> topBusRightX) so visibleResistanceForRow
+									// picks up all top-bus wire segments including the rightmost split-bus extension.
+									segmentGeometry: { x1: layout.xCell, y1: layout.yTop, x2: layout.topBusRightX, y2: layout.yTop }
+								});
+								continue;
+							}
+						if (Math.abs(numerator) > EPS_V) {
+							const Iinf = numerator > 0 ? Infinity : -Infinity;
+							branchCurrents[branchIndex] = Iinf;
+							hasInfiniteCurrent = true;
+							continue;
+						}
+
+						unresolvedZeroRBranches.push(branchIndex);
+					}
+
+					if (!hasInfiniteCurrent && unresolvedZeroRBranches.length > 0) {
+						const target = Number.isFinite(targetStageCurrent) ? targetStageCurrent : 0;
+						const remainder = target - sumResolvedFinite;
+						const share = remainder / unresolvedZeroRBranches.length;
+						for (const branchIndex of unresolvedZeroRBranches) {
+							branchCurrents[branchIndex] = share;
+						}
+					}
+
+					return { branchCurrents, hasInfiniteCurrent };
+				}
+
+				stageEquivalent(stage) {
+					const models = stage.branches.map((branch) => this.branchModel(branch));
+					const G = models.reduce((sum, m) => sum + (1 / m.effectiveR), 0);
+					if (G <= 0) return { Req: 1e9, Eeq: 0, models };
+					const Req = 1 / G;
+					const Eeq = models.reduce((sum, m) => sum + (m.E / m.effectiveR), 0) * Req;
+					return { Req, Eeq, models };
+				}
+
+				getSolveLayout() {
+					if (this.state.layout) return this.state.layout;
+					const rect = canvas.getBoundingClientRect();
+					if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0) {
+						return null;
+					}
+					return computeLayout(rect.width, rect.height);
+				}
+
+				isSimpleSeriesLayout(layout) {
+					if (!layout) return false;
+					return (layout.stages || []).every((stage) => stage.branches.length === 1 && stage.branches[0].items.length <= 1);
+				}
+
+				primaryCellGeometry(layout) {
+					const leftSeriesPathHeight = this.state.leftSeries.reduce((sum, id) => sum + componentBodyHeight(id) + CONNECTOR_WIRE * 2, 0);
+					const totalLeftCellHeight = this.state.internalR
+						? (RES_H + EMF_BODY_HEIGHT + CONNECTOR_WIRE * 4 + CELL_PADDING)
+						: (EMF_BODY_HEIGHT + CONNECTOR_WIRE * 2);
+					const totalLeftComponentHeight = totalLeftCellHeight + leftSeriesPathHeight;
+					const leftExtra = Math.max(0, (layout.yBottom - layout.yTop) - (totalLeftComponentHeight + END_BUS_CONNECTOR * 2));
+					const topEndLead = END_BUS_CONNECTOR + leftExtra * 0.5;
+					const componentStartY = Number.isFinite(layout.leftCellStartY) ? layout.leftCellStartY : (layout.yTop + topEndLead + leftSeriesPathHeight);
+					const irTop = componentStartY + CONNECTOR_WIRE;
+					const irBottom = irTop + RES_H;
+					const emfTop = this.state.internalR ? (irBottom + CONNECTOR_WIRE * 2) : (componentStartY + CONNECTOR_WIRE);
+					const emfBottom = emfTop + EMF_BODY_HEIGHT;
+					const secondBottomPlateY = emfBottom;
+					return {
+						componentStartY,
+						topPlateY: emfTop,
+						bottomPlateY: secondBottomPlateY,
+						emfConnectorBottomY: emfBottom + CONNECTOR_WIRE,
+						emfPaddingBottomY: emfBottom + CONNECTOR_WIRE + (this.state.internalR ? CELL_PADDING : 0)
+					};
+				}
+
+				primaryCellPlateVoltages(byId, fallbackTopV, fallbackBottomV) {
+					const primaryLeftCellId = (this.state.leftSeries || []).find((id) => isExtraCell(id)) || PRIMARY_CELL_ID;
+					const sol = byId && byId[primaryLeftCellId];
+					if (!sol) {
+						return {
+							cellTopPlateV: fallbackTopV,
+							cellBottomPlateV: fallbackBottomV
+						};
+					}
+					const topV = Number.isFinite(sol.Vtop) ? sol.Vtop : fallbackTopV;
+					const bottomV = Number.isFinite(sol.Vbottom) ? sol.Vbottom : fallbackBottomV;
+					const current = Number.isFinite(sol.I) ? sol.I : 0;
+					const rInternal = this.state.internalR ? getCellRInternal(primaryLeftCellId) : 0;
+					return {
+						cellTopPlateV: topV + current * rInternal,
+						cellBottomPlateV: bottomV
+					};
+				}
+
+				applyShortSwitchResistanceReadout(solution, flaggedIds) {
+					if (!solution || !solution.byId) return;
+					const useAllClosedSwitches = !(flaggedIds instanceof Set);
+					for (const [id, reading] of Object.entries(solution.byId)) {
+						if (!reading || !isBranchSwitch(id) || !isComponentSwitchClosed(id)) continue;
+						if (!useAllClosedSwitches && !flaggedIds.has(id)) continue;
+						reading.R = closedSwitchWireResistance(id);
+					}
+				}
+
+				rebaseSolutionPotentialsToZero(solution) {
+					if (!solution || !solution.byId) return solution;
+					const finite = [];
+					for (const reading of Object.values(solution.byId || {})) {
+						if (!reading) continue;
+						if (Number.isFinite(reading.Vtop)) finite.push(reading.Vtop);
+						if (Number.isFinite(reading.Vbottom)) finite.push(reading.Vbottom);
+					}
+					if (Array.isArray(solution.stageNodeV)) {
+						for (const v of solution.stageNodeV) {
+							if (Number.isFinite(v)) finite.push(v);
+						}
+					}
+					const scalarKeys = [
+						"Vext",
+						"switchVLeft",
+						"switchVRight",
+						"leftTopV",
+						"bottomRightV",
+						"cellTopPlateV",
+						"cellBottomPlateV"
+					];
+					for (const key of scalarKeys) {
+						if (Number.isFinite(solution[key])) finite.push(solution[key]);
+					}
+
+					if (!finite.length) return solution;
+					const minV = Math.min(...finite);
+					if (!Number.isFinite(minV) || Math.abs(minV) <= 1e-12) {
+						const boundsNoShift = this.computeVoltageBounds(finite, solution.byId);
+						solution.vMin = boundsNoShift.vMin;
+						solution.vMax = boundsNoShift.vMax;
+						return solution;
+					}
+
+					for (const reading of Object.values(solution.byId || {})) {
+						if (!reading) continue;
+						if (Number.isFinite(reading.Vtop)) reading.Vtop -= minV;
+						if (Number.isFinite(reading.Vbottom)) reading.Vbottom -= minV;
+					}
+					if (Array.isArray(solution.stageNodeV)) {
+						solution.stageNodeV = solution.stageNodeV.map((v) => Number.isFinite(v) ? (v - minV) : v);
+					}
+					for (const key of scalarKeys) {
+						if (Number.isFinite(solution[key])) solution[key] -= minV;
+					}
+
+					const shiftedSeeds = [];
+					if (Array.isArray(solution.stageNodeV)) {
+						for (const v of solution.stageNodeV) {
+							if (Number.isFinite(v)) shiftedSeeds.push(v);
+						}
+					}
+					for (const key of scalarKeys) {
+						if (Number.isFinite(solution[key])) shiftedSeeds.push(solution[key]);
+					}
+					const bounds = this.computeVoltageBounds(shiftedSeeds, solution.byId);
+					solution.vMin = bounds.vMin;
+					solution.vMax = bounds.vMax;
+					return solution;
+				}
+
+				finalizeSolvedSolution(solution) {
+					if (!solution || !solution.byId) return solution;
+					if (solution.shortAdjustedFromIdeal === true && Array.isArray(solution.idealShortSwitchSectionIds)) {
+						for (const id of solution.idealShortSwitchSectionIds) {
+							const reading = solution.byId[id];
+							if (!reading) continue;
+							const sign = Number.isFinite(reading.I) ? (reading.I < 0 ? -1 : 1) : 1;
+							reading.I = sign < 0 ? -Infinity : Infinity;
+							reading.shortCircuitSection = true;
+						}
+					}
+					const shortCircuitSectionIds = [];
+					const shortCircuitIdSet = new Set();
+					for (const [id, reading] of Object.entries(solution.byId)) {
+						if (!reading) continue;
+						const shortSection = isShortCircuitCurrentValue(reading.I);
+						reading.shortCircuitSection = shortSection;
+						if (shortSection) {
+							shortCircuitSectionIds.push(id);
+							shortCircuitIdSet.add(id);
+						}
+					}
+					solution.shortCircuitSectionIds = shortCircuitSectionIds;
+					solution.shortCircuitCurrentThresholdA = SHORT_CIRCUIT_CURRENT_THRESHOLD_A;
+					const mainLoopShort = isShortCircuitCurrentValue(solution.Itotal);
+					solution.mainLoopShortCircuit = mainLoopShort;
+					const hasShortSections = shortCircuitSectionIds.length > 0;
+					const computedShortCircuit = mainLoopShort || hasShortSections;
+					if (computedShortCircuit) solution.hasInfiniteCurrent = true;
+					if (solution.shortAdjustedFromIdeal === true && shortCircuitSectionIds.length > 0) solution.hasInfiniteCurrent = true;
+					solution.isShortCircuit = computedShortCircuit;
+					if (shortCircuitSectionIds.some((id) => isBranchSwitch(id) && isComponentSwitchClosed(id))) {
+						this.applyShortSwitchResistanceReadout(solution, shortCircuitIdSet);
+					}
+					return this.rebaseSolutionPotentialsToZero(solution);
+				}
+
+				buildSingularMatrixDiagnosticSolution() {
+					const byId = this.zeroReadings(0);
+					const stageNodeV = new Array(this.state.stages.length + 1).fill(0);
+					const Itotal = 0;
+					const { cellTopPlateV, cellBottomPlateV } = this.primaryCellPlateVoltages(byId, 0, 0);
+					return {
+						byId,
+						Itotal,
+						hasInfiniteCurrent: false,
+						matrixSolveFailed: true,
+						stageNodeV,
+						Vext: 0,
+						switchVLeft: 0,
+						switchVRight: stageNodeV[0] || 0,
+						cellTopPlateV,
+						cellBottomPlateV,
+						vMin: 0,
+						vMax: 1e-6
+					};
+				}
+
+				getIdealShortSwitchSectionIds() {
+					const EPS_R = 1e-9;
+					const EPS_V = 1e-6;
+					const ids = new Set();
+					for (const stage of this.state.stages || []) {
+						for (const branch of (stage && stage.branches) || []) {
+							const model = this.branchModelIntrinsic(branch || []);
+							const isIdealShortBranch = model.R <= EPS_R && Math.abs(model.E) <= EPS_V;
+							if (!isIdealShortBranch) continue;
+							for (const id of branch || []) {
+								if (isBranchSwitch(id) && isComponentSwitchClosed(id)) ids.add(id);
+							}
+						}
+					}
+					return ids;
+				}
+
+				estimateMainSwitchWireResistance() {
+					return Math.max(1e-9, 32 * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				solverUsesFullWireResistance() {
+					return !!state.useWireResistanceInSolve;
+				}
+
+				resolveTopBusEndX(layout) {
+					if (!layout) return 0;
+					return Number.isFinite(layout.topBusRightX) ? layout.topBusRightX : layout.xRight;
+				}
+
+				resolveBottomBusEndX(layout) {
+					if (!layout) return 0;
+					return Number.isFinite(layout.bottomBusRightX) ? layout.bottomBusRightX : layout.xRight;
+				}
+
+				rightRailLength(layout) {
+					if (!layout) return 0;
+					return Math.max(0, layout.yBottom - layout.yTop);
+				}
+
+				leftRailLength(layout) {
+					if (!layout) return 0;
+					let leftVerticalLen = this.rightRailLength(layout);
+					if ((layout.leftSeriesItems || []).length > 0) {
+						let runY = layout.yTop;
+						leftVerticalLen = 0;
+						for (const item of layout.leftSeriesItems) {
+							leftVerticalLen += Math.max(0, item.top - runY);
+							runY = item.bottom;
+						}
+						leftVerticalLen += Math.max(0, layout.yBottom - runY);
+					}
+					return leftVerticalLen;
+				}
+
+				estimateMainSwitchPathWireResistance() {
+					const layout = this.getSolveLayout();
+					if (!layout) return this.estimateMainSwitchWireResistance();
+					const topLeftLen = Math.max(0, (layout.xSwitch - 16) - layout.xCell);
+					const bladeLen = state.switchClosed ? 32 : Math.hypot(30, 14);
+					const topBusEndX = this.resolveTopBusEndX(layout);
+					const topRightLen = Math.max(0, topBusEndX - (layout.xSwitch + 16));
+					return Math.max(1e-12, (topLeftLen + bladeLen + topRightLen) * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				estimateBottomBusWireResistance() {
+					const layout = this.getSolveLayout();
+					if (!layout) return Math.max(1e-12, 120 * SHORT_WIRE_R_PER_PIXEL);
+					const bottomEndX = this.resolveBottomBusEndX(layout);
+					const bottomLen = Math.max(0, Math.abs(bottomEndX - layout.xCell));
+					return Math.max(1e-12, bottomLen * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				estimateRightRailCommonWireResistance(stageCount) {
+					const layout = this.getSolveLayout();
+					if (!layout) return Math.max(1e-12, 80 * SHORT_WIRE_R_PER_PIXEL);
+					if (stageCount <= 0) {
+						return Math.max(1e-12, this.rightRailLength(layout) * SHORT_WIRE_R_PER_PIXEL);
+					}
+					let totalLen = 0;
+					let currentY = layout.yTop;
+					for (const stage of (layout.stages || [])) {
+						const isTopBoundaryStage = stage.index === 0;
+						const isBottomBoundaryStage = stage.index === (layout.stages.length - 1);
+						const stageEntryTop = isTopBoundaryStage ? layout.yTop : stage.junctionTop;
+						const stageExitBottom = isBottomBoundaryStage ? layout.yBottom : stage.junctionBottom;
+						if (currentY < stageEntryTop - 1e-6) totalLen += (stageEntryTop - currentY);
+						currentY = stageExitBottom;
+					}
+					if (currentY < layout.yBottom - 1e-6) totalLen += (layout.yBottom - currentY);
+					return Math.max(1e-12, totalLen * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				estimateNoStageRightAndBottomWireResistance() {
+					const layout = this.getSolveLayout();
+					if (!layout) return Math.max(1e-12, 180 * SHORT_WIRE_R_PER_PIXEL);
+					const rightVerticalLen = this.rightRailLength(layout);
+					const bottomLen = Math.max(0, Math.abs(this.resolveBottomBusEndX(layout) - layout.xCell));
+					return Math.max(1e-12, (rightVerticalLen + bottomLen) * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				estimateCommonLoopWireResistance(stageCount) {
+					const leftRailR = this.estimateLeftRailWireResistance();
+					if (stageCount <= 0) return leftRailR;
+					return leftRailR + this.estimateBottomBusWireResistance() + this.estimateRightRailCommonWireResistance(stageCount);
+				}
+
+				estimateStageBranchConnectorWireResistance(stageIndex, branchIndex) {
+					const lengths = this.getStageBranchWireLengths(stageIndex, branchIndex);
+					const betweenLen = lengths.between.reduce((sum, len) => sum + len, 0);
+					const connectorLen = lengths.topBus + lengths.topLead + betweenLen + lengths.bottomLead + lengths.bottomBus;
+					return Math.max(1e-12, connectorLen * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				estimateStageBranchWireResistance(stageIndex, branchIndex) {
+					const lengths = this.getStageBranchWireLengths(stageIndex, branchIndex);
+					return Math.max(1e-9, lengths.total * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				getStageBranchWireLengths(stageIndex, branchIndex) {
+					const layout = this.getSolveLayout();
+					if (!layout || !layout.stages || !layout.stages[stageIndex]) {
+						const fallbackTopBus = 0;
+						const fallbackTopLead = CONNECTOR_WIRE;
+						const fallbackBottomLead = CONNECTOR_WIRE;
+						const fallbackBottomBus = 0;
+						const fallbackBodyById = {};
+						const stage = this.state.stages[stageIndex];
+						const branch = stage && stage.branches ? (stage.branches[branchIndex] || []) : [];
+						for (const id of branch) fallbackBodyById[id] = RES_H;
+						const total = fallbackTopBus + fallbackTopLead + fallbackBottomLead + fallbackBottomBus
+							+ Object.values(fallbackBodyById).reduce((a, b) => a + b, 0);
+						return {
+							topBus: fallbackTopBus,
+							topLead: fallbackTopLead,
+							between: [],
+							bodyById: fallbackBodyById,
+							bottomLead: fallbackBottomLead,
+							bottomBus: fallbackBottomBus,
+							total
+						};
+					}
+					const stageLayout = layout.stages[stageIndex];
+					const branchLayout = stageLayout.branches && stageLayout.branches[branchIndex];
+					const branchX = branchLayout && Number.isFinite(branchLayout.x) ? branchLayout.x : layout.xRight;
+					const items = branchLayout && Array.isArray(branchLayout.items) ? branchLayout.items : [];
+					const topBus = Math.max(0, Math.abs(branchX - layout.xRight));
+					const bottomBus = Math.max(0, Math.abs(branchX - layout.xRight));
+					let topLead = 0;
+					let bottomLead = 0;
+					const between = [];
+					const bodyById = {};
+
+					if (items.length > 0) {
+						topLead = Math.max(0, items[0].top - stageLayout.junctionTop);
+						bottomLead = Math.max(0, stageLayout.junctionBottom - items[items.length - 1].bottom);
+						for (let i = 0; i < items.length; i++) {
+							const item = items[i];
+							bodyById[item.id] = Math.max(0, item.bottom - item.top);
+							if (i < items.length - 1) {
+								between.push(Math.max(0, items[i + 1].top - item.bottom));
+							}
+						}
+					} else {
+						topLead = Math.max(0, stageLayout.junctionBottom - stageLayout.junctionTop);
+					}
+
+					const total = topBus + topLead + bottomLead + bottomBus
+						+ between.reduce((sum, len) => sum + len, 0)
+						+ Object.values(bodyById).reduce((sum, len) => sum + len, 0);
+
+					return { topBus, topLead, between, bodyById, bottomLead, bottomBus, total: Math.max(1e-9, total) };
+				}
+
+				fallbackZeroResistanceSolution(netEmf) {
+					const byId = {};
+					let leftRunV = 0;
+					for (const id of this.state.leftSeries) {
+						const R = componentResistance(id);
+						const Vdrop = -componentEmf(id);
+						byId[id] = { I: 0, V: Vdrop, R, Vtop: leftRunV, Vbottom: leftRunV + Vdrop };
+						leftRunV += Vdrop;
+					}
+					const stageNodeV = [0];
+					let runV = 0;
+					const stageCount = Math.max(1, this.state.stages.length);
+					const stageDrop = netEmf / stageCount;
+					for (let stageIndex = 0; stageIndex < this.state.stages.length; stageIndex++) {
+						const stage = this.state.stages[stageIndex];
+						const stageTopV = runV;
+						const stageBottomV = stageTopV + stageDrop;
+						for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+							const branch = stage.branches[branchIndex];
+							let vNow = stageTopV;
+							const branchDrop = stageDrop / Math.max(1, branch.length);
+							for (const id of branch) {
+								const R = componentResistance(id);
+								byId[id] = { I: 0, V: branchDrop, R, Vtop: vNow, Vbottom: vNow + branchDrop };
+								vNow += branchDrop;
+							}
+						}
+						runV = stageBottomV;
+						stageNodeV.push(runV);
+					}
+					let vMin = Math.min(0, leftRunV, runV);
+					let vMax = Math.max(1e-6, leftRunV, runV);
+					for (const reading of Object.values(byId)) {
+						if (!reading) continue;
+						vMin = Math.min(vMin, reading.Vtop, reading.Vbottom);
+						vMax = Math.max(vMax, reading.Vtop, reading.Vbottom);
+					}
+					const { cellTopPlateV, cellBottomPlateV } = this.primaryCellPlateVoltages(byId, 0, runV);
+					return {
+						byId,
+						Itotal: 0,
+						isShortCircuit: true,
+						hasInfiniteCurrent: true,
+						forceInfiniteAllCurrents: true,
+						zeroResistanceWithEMF: true,
+						stageNodeV,
+						Vext: runV,
+						switchVLeft: 0,
+						switchVRight: stageNodeV[0] || 0,
+						leftTopV: 0,
+						bottomRightV: runV,
+						cellTopPlateV,
+						cellBottomPlateV,
+						vMin,
+						vMax
+					};
+				}
+
+				buildOpenSwitchSolution() {
+					const byId = {};
+					let hasInfiniteCurrent = false;
+					const leftRunV = this.writeBranchReadings(byId, this.state.leftSeries, 0, 0);
+
+					const stageEquivalents = this.state.stages.map((stage) => this.stageEquivalent(stage));
+					const openCircuitDrops = [];
+					let rightOpenDrop = 0;
+					for (const stageEq of stageEquivalents) {
+						const Vstage = -stageEq.Eeq;
+						openCircuitDrops.push(Vstage);
+						rightOpenDrop += Vstage;
+					}
+
+					const switchVRight = leftRunV - rightOpenDrop;
+					const stageNodeV = [switchVRight];
+					let runV = switchVRight;
+
+					for (let stageIndex = 0; stageIndex < this.state.stages.length; stageIndex++) {
+						const stage = this.state.stages[stageIndex];
+						const stageEq = stageEquivalents[stageIndex];
+						const Vstage = openCircuitDrops[stageIndex];
+						const stageTopV = runV;
+						const stageBottomV = stageTopV + Vstage;
+						const stageSolved = this.solveStageBranchCurrents(stage, stageEq, Vstage, 0);
+						if (stageSolved.hasInfiniteCurrent) hasInfiniteCurrent = true;
+						for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+							const branch = stage.branches[branchIndex];
+							const Ibranch = stageSolved.branchCurrents[branchIndex];
+							this.writeBranchReadings(byId, branch, Ibranch, stageTopV);
+						}
+						runV = stageBottomV;
+						stageNodeV.push(runV);
+					}
+
+					const { vMin, vMax } = this.computeVoltageBounds([0, leftRunV, switchVRight, runV], byId);
+					const { cellTopPlateV, cellBottomPlateV } = this.primaryCellPlateVoltages(byId, 0, leftRunV);
+
+					return {
+						byId,
+						Itotal: 0,
+						hasInfiniteCurrent,
+						stageNodeV,
+						Vext: leftRunV,
+						switchVLeft: 0,
+						switchVRight,
+						bottomRightV: nodeV.B,
+						cellTopPlateV,
+						cellBottomPlateV,
+						vMin,
+						vMax
+					};
+				}
+
+				buildSelectiveShortCircuitSolution(netEmf) {
+					const EPS_R = 1e-9;
+					const EPS_V = 1e-6;
+					const byId = {};
+					const shortedIds = new Set();
+
+					const finiteStages = this.state.stages.map((stage) => {
+						const finiteBranches = [];
+						for (const branch of stage.branches) {
+							const model = this.branchModel(branch);
+							const isIdealShortBranch = model.R <= EPS_R && Math.abs(model.E) <= EPS_V;
+							if (isIdealShortBranch) {
+								for (const id of branch) shortedIds.add(id);
+							} else {
+								finiteBranches.push(branch);
+							}
+						}
+						return { branches: finiteBranches };
+					});
+
+					if (shortedIds.size === 0) return null;
+
+					const leftModel = this.branchModel(this.state.leftSeries || []);
+					const finiteStageEquivalents = finiteStages.map((stage) => this.stageEquivalent(stage));
+					const RextFinite = finiteStageEquivalents.reduce((sum, s) => sum + s.Req, 0);
+					const EextFinite = finiteStageEquivalents.reduce((sum, s) => sum + s.Eeq, 0);
+					const RtotalFinite = leftModel.R + RextFinite;
+					const netEmfFinite = EextFinite - leftModel.E;
+					const hasFinitePath = Number.isFinite(RtotalFinite) && RtotalFinite > EPS_R && RtotalFinite < 1e8;
+					const ItotalFinite = hasFinitePath ? (netEmfFinite / RtotalFinite) : 0;
+
+					const Ileft = -ItotalFinite;
+					const leftRunV = this.writeBranchReadings(byId, this.state.leftSeries, Ileft, 0);
+
+					const stageNodeV = [0];
+					let runV = 0;
+
+					for (let stageIndex = 0; stageIndex < this.state.stages.length; stageIndex++) {
+						const stage = this.state.stages[stageIndex];
+						const finiteStage = finiteStages[stageIndex];
+						const stageEq = finiteStageEquivalents[stageIndex];
+						const stageTopV = runV;
+						const stageHasFiniteBranches = finiteStage.branches.length > 0 && stageEq.Req < 1e8;
+						const Vstage = stageHasFiniteBranches ? (ItotalFinite * stageEq.Req - stageEq.Eeq) : 0;
+						const stageBottomV = stageTopV + Vstage;
+
+						let finiteBranchIndex = 0;
+						for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+							const branch = stage.branches[branchIndex];
+							const model = this.branchModel(branch);
+							const isIdealShortBranch = model.R <= EPS_R && Math.abs(model.E) <= EPS_V;
+
+							if (isIdealShortBranch) {
+								const Iinf = netEmf >= 0 ? Infinity : -Infinity;
+								let vNow = stageTopV;
+								for (const id of branch) {
+									const R = componentResistance(id);
+									const Vdrop = (R > EPS_R ? (Iinf * R) : 0) - componentEmf(id);
+									const bottomV = Number.isFinite(Vdrop) ? (vNow + Vdrop) : vNow;
+									byId[id] = { I: Iinf, V: Vdrop, R, Vtop: vNow, Vbottom: bottomV };
+									vNow = bottomV;
+								}
+								continue;
+							}
+
+							const branchModel = stageEq.models[finiteBranchIndex++];
+							const Ibranch = this.solveBranchCurrent(Vstage + branchModel.E, branchModel);
+							this.writeBranchReadings(byId, branch, Ibranch, stageTopV);
+						}
+
+						runV = stageBottomV;
+						stageNodeV.push(runV);
+					}
+
+					const { cellTopPlateV, cellBottomPlateV } = this.primaryCellPlateVoltages(byId, 0, runV);
+					const { vMin, vMax } = this.computeVoltageBounds([0, leftRunV, runV, cellTopPlateV, cellBottomPlateV], byId);
+
+					return {
+						byId,
+						Itotal: netEmf >= 0 ? Infinity : -Infinity,
+						isShortCircuit: true,
+						hasInfiniteCurrent: true,
+						stageNodeV,
+						Vext: runV,
+						switchVLeft: 0,
+						switchVRight: stageNodeV[0] || 0,
+						cellTopPlateV,
+						cellBottomPlateV,
+						vMin,
+						vMax
+					};
+				}
+
+				buildZeroResistanceSolution(netEmf, stageEquivalents) {
+					const layout = this.getSolveLayout();
+					if (!this.isSimpleSeriesLayout(layout) || this.state.internalR) {
+						return this.fallbackZeroResistanceSolution(netEmf);
+					}
+
+					const byId = {};
+					const stageNodeV = new Array(this.state.stages.length + 1).fill(0);
+					const rightItems = (layout.stages || []).map((stage) => stage.branches[0].items[0]).filter(Boolean);
+
+					// Cell1 (PRIMARY_CELL_ID) is already in leftSeriesItems â€” do NOT double-count it
+					const leftComponentDrops = (layout.leftSeriesItems || []).reduce((sum, item) => sum + (-componentEmf(item.id)), 0);
+					const rightTraversalDrops = rightItems.reduce((sum, item) => sum + componentEmf(item.id), 0);
+					const totalComponentTraversalDrop = leftComponentDrops + rightTraversalDrops;
+
+					const topLeftLen = Math.max(0, (layout.xSwitch - 16) - layout.xCell);
+					const switchLen = 32;
+					const topRightLen = Math.max(0, layout.xRight - (layout.xSwitch + 16));
+					const bottomLen = Math.max(0, layout.xRight - layout.xCell);
+
+					let totalWireLength = topLeftLen + switchLen + topRightLen + bottomLen;
+					let runY = layout.yTop;
+					for (const item of (layout.leftSeriesItems || [])) {
+						totalWireLength += Math.max(0, item.top - runY);
+						runY = item.bottom;
+					}
+					// Wire from last left series item (or yTop) straight to bottom corner
+					totalWireLength += Math.max(0, layout.yBottom - runY);
+
+					let rightY = layout.yBottom;
+					for (let index = rightItems.length - 1; index >= 0; index--) {
+						const item = rightItems[index];
+						totalWireLength += Math.max(0, rightY - item.bottom);
+						totalWireLength += Math.max(0, item.top - layout.stages[index].junctionTop);
+						rightY = layout.stages[index].junctionTop;
+					}
+
+					const wireDeltaPerPixel = totalWireLength > 1e-6 ? (-totalComponentTraversalDrop / totalWireLength) : 0;
+					const pseudoCurrent = wireDeltaPerPixel / SHORT_WIRE_R_PER_PIXEL;
+
+					const applyWireDelta = (length) => wireDeltaPerPixel * Math.max(0, length);
+
+					let leftTopV = 0;
+					let vNow = leftTopV;
+					let leftY = layout.yTop;
+					for (const item of (layout.leftSeriesItems || [])) {
+						vNow += applyWireDelta(item.top - leftY);
+						const topV = vNow;
+						const Vdrop = -componentEmf(item.id);
+						const bottomV = topV + Vdrop;
+						byId[item.id] = { I: -pseudoCurrent, V: Vdrop, R: componentResistance(item.id), Vtop: topV, Vbottom: bottomV };
+						vNow = bottomV;
+						leftY = item.bottom;
+					}
+					// Wire from last left series item straight to bottom corner
+					vNow += applyWireDelta(layout.yBottom - leftY);
+					const Vext = vNow;
+
+					const { cellTopPlateV, cellBottomPlateV } = this.primaryCellPlateVoltages(byId, leftTopV, Vext);
+
+					vNow += applyWireDelta(bottomLen);
+					const bottomRightV = vNow;
+					stageNodeV[this.state.stages.length] = bottomRightV;
+
+					let currentBottomV = bottomRightV;
+					let currentBottomY = layout.yBottom;
+					for (let stageIndex = this.state.stages.length - 1; stageIndex >= 0; stageIndex--) {
+						const stageLayout = layout.stages[stageIndex];
+						const item = stageLayout.branches[0].items[0];
+						currentBottomV += applyWireDelta(currentBottomY - item.bottom);
+						const itemBottomV = currentBottomV;
+						const drawVdrop = -componentEmf(item.id);
+						const itemTopV = itemBottomV - drawVdrop;
+						byId[item.id] = { I: pseudoCurrent, V: drawVdrop, R: componentResistance(item.id), Vtop: itemTopV, Vbottom: itemBottomV };
+						currentBottomV = itemTopV + applyWireDelta(item.top - stageLayout.junctionTop);
+						stageNodeV[stageIndex] = currentBottomV;
+						currentBottomY = stageLayout.junctionTop;
+					}
+
+					let topRightNodeV = stageNodeV[0] || currentBottomV;
+					const switchVRight = topRightNodeV + applyWireDelta(topRightLen);
+					const switchVLeft = switchVRight + applyWireDelta(switchLen);
+					const closedLoopV = switchVLeft + applyWireDelta(topLeftLen);
+
+					let vMin = Math.min(leftTopV, Vext, bottomRightV, topRightNodeV, switchVLeft, switchVRight, closedLoopV, cellTopPlateV);
+					let vMax = Math.max(1e-6, leftTopV, Vext, bottomRightV, topRightNodeV, switchVLeft, switchVRight, closedLoopV, cellTopPlateV);
+					for (const reading of Object.values(byId)) {
+						if (!reading) continue;
+						vMin = Math.min(vMin, reading.Vtop, reading.Vbottom);
+						vMax = Math.max(vMax, reading.Vtop, reading.Vbottom);
+					}
+
+					return {
+						byId,
+						Itotal: pseudoCurrent,
+						isShortCircuit: true,
+						hasInfiniteCurrent: true,
+						forceInfiniteAllCurrents: true,
+						zeroResistanceWithEMF: true,
+						stageNodeV,
+						Vext,
+						switchVLeft,
+						switchVRight,
+						leftTopV,
+						bottomRightV,
+						cellTopPlateV,
+						cellBottomPlateV,
+						vMin,
+						vMax
+					};
+			}
+
+				estimateNoStageWireResistance() {
+					const layout = this.getSolveLayout();
+					if (!layout) return SHORT_WIRE_R_PER_PIXEL * 200;
+					const topLeftLen = Math.max(0, (layout.xSwitch - 16) - layout.xCell);
+					const switchLen = 32;
+					const topRightLen = Math.max(0, layout.xRight - (layout.xSwitch + 16));
+					const rightVerticalLen = this.rightRailLength(layout);
+					const bottomLen = Math.max(0, layout.xRight - layout.xCell);
+					const leftVerticalLen = this.leftRailLength(layout);
+					const totalLen = topLeftLen + switchLen + topRightLen + rightVerticalLen + bottomLen + leftVerticalLen;
+					return Math.max(1e-6, totalLen * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				estimateLeftRailWireResistance() {
+					const layout = this.getSolveLayout();
+					if (!layout) return SHORT_WIRE_R_PER_PIXEL * 120;
+					const leftVerticalLen = this.leftRailLength(layout);
+					return Math.max(1e-6, leftVerticalLen * SHORT_WIRE_R_PER_PIXEL);
+				}
+
+				solveLinearSystem(matrix, rhs) {
+					const n = matrix.length;
+					if (!Number.isFinite(n) || n <= 0 || rhs.length !== n) return null;
+					const A = matrix.map((row) => row.slice());
+					const b = rhs.slice();
+					const EPS = 1e-12;
+					for (let col = 0; col < n; col++) {
+						let pivotRow = col;
+						let best = Math.abs(A[col][col]);
+						for (let row = col + 1; row < n; row++) {
+							const candidate = Math.abs(A[row][col]);
+							if (candidate > best) {
+								best = candidate;
+								pivotRow = row;
+							}
+						}
+						if (best <= EPS) return null;
+						if (pivotRow !== col) {
+							const tmpRow = A[col];
+							A[col] = A[pivotRow];
+							A[pivotRow] = tmpRow;
+							const tmpB = b[col];
+							b[col] = b[pivotRow];
+							b[pivotRow] = tmpB;
+						}
+						const pivot = A[col][col];
+						for (let row = col + 1; row < n; row++) {
+							const factor = A[row][col] / pivot;
+							if (Math.abs(factor) <= EPS) continue;
+							for (let k = col; k < n; k++) {
+								A[row][k] -= factor * A[col][k];
+							}
+							b[row] -= factor * b[col];
+						}
+					}
+					const x = new Array(n).fill(0);
+					for (let row = n - 1; row >= 0; row--) {
+						let sum = b[row];
+						for (let col = row + 1; col < n; col++) {
+							sum -= A[row][col] * x[col];
+						}
+						const pivot = A[row][row];
+						if (Math.abs(pivot) <= EPS) return null;
+						x[row] = sum / pivot;
+					}
+					return x;
+				}
+
+				solveWithKirchhoffMatrix(includeWireROverride = null) {
+					const stageCount = this.state.stages.length;
+					const EPS_R = 1e-9;
+					const EPS_V = 1e-6;
+					const includeWireR = (typeof includeWireROverride === "boolean")
+						? includeWireROverride
+						: this.solverUsesFullWireResistance();
+					const elements = [];
+					const hasLeftSeriesComponents = (this.state.leftSeries || []).length > 0;
+					const commonLoopWireR = includeWireR ? this.estimateCommonLoopWireResistance(stageCount) : 0;
+					const leftModel = hasLeftSeriesComponents
+						? this.branchModel(this.state.leftSeries || [])
+						: { R: 0, E: 0 };
+					elements.push({
+						name: "left",
+						kind: hasLeftSeriesComponents ? "left" : "leftWire",
+						from: "A",
+						to: "B",
+						R: Math.max(1e-12, leftModel.R + commonLoopWireR),
+						E: leftModel.E
+					});
+
+					elements.push({
+						name: "mainSwitch",
+						kind: "switch",
+						from: "A",
+						to: "N0",
+						R: this.state.switchClosed
+								? (includeWireR
+									? this.estimateMainSwitchPathWireResistance()
+									: (this.state.useShortSwitchWireResistance ? this.estimateMainSwitchWireResistance() : 0))
+								: (SWITCH_OPEN_RESISTANCE + (includeWireR ? this.estimateMainSwitchPathWireResistance() : 0)),
+						E: 0
+					});
+
+					for (let stageIndex = 0; stageIndex < stageCount; stageIndex++) {
+						const stage = this.state.stages[stageIndex];
+						const fromNode = `N${stageIndex}`;
+						const toNode = (stageIndex === stageCount - 1) ? "B" : `N${stageIndex + 1}`;
+						for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+							const branch = stage.branches[branchIndex];
+							const intrinsicModel = this.branchModelIntrinsic(branch);
+							const isIdealShortBranch = intrinsicModel.R <= EPS_R && Math.abs(intrinsicModel.E) <= EPS_V;
+							const baseModel = this.branchModel(branch);
+							const branchWireR = includeWireR ? this.estimateStageBranchConnectorWireResistance(stageIndex, branchIndex) : 0;
+							const model = (this.state.useShortSwitchWireResistance && isIdealShortBranch && !includeWireR)
+								? { R: this.estimateStageBranchWireResistance(stageIndex, branchIndex), E: intrinsicModel.E }
+								: { R: baseModel.R + branchWireR, E: baseModel.E };
+							elements.push({
+								name: `stage_${stageIndex}_branch_${branchIndex}`,
+								kind: "stageBranch",
+								stageIndex,
+								branchIndex,
+								from: fromNode,
+								to: toNode,
+								R: model.R,
+								E: model.E
+							});
+						}
+					}
+
+					if (stageCount === 0) {
+						elements.push({
+							name: "noStageWire",
+							kind: "wire",
+							from: "N0",
+							to: "B",
+							R: includeWireR ? this.estimateNoStageRightAndBottomWireResistance() : this.estimateNoStageWireResistance(),
+							E: 0
+						});
+					}
+
+					const nodeNames = ["B"];
+					const maxN = Math.max(1, stageCount);
+					for (let i = 0; i < maxN; i++) nodeNames.push(`N${i}`);
+					const nodeIndex = Object.fromEntries(nodeNames.map((name, idx) => [name, idx]));
+					const nodeVarCount = nodeNames.length;
+					const elementVarCount = elements.length;
+					const unknownCount = nodeVarCount + elementVarCount;
+
+					const matrix = Array.from({ length: unknownCount }, () => new Array(unknownCount).fill(0));
+					const rhs = new Array(unknownCount).fill(0);
+
+					for (let rowNode = 0; rowNode < nodeVarCount; rowNode++) {
+						const node = nodeNames[rowNode];
+						for (let elementIndex = 0; elementIndex < elementVarCount; elementIndex++) {
+							const element = elements[elementIndex];
+							const currentCol = nodeVarCount + elementIndex;
+							if (element.from === node) matrix[rowNode][currentCol] += 1;
+							if (element.to === node) matrix[rowNode][currentCol] -= 1;
+						}
+					}
+
+					for (let elementIndex = 0; elementIndex < elementVarCount; elementIndex++) {
+						const row = nodeVarCount + elementIndex;
+						const element = elements[elementIndex];
+						if (element.from !== "A") {
+							const fromCol = nodeIndex[element.from];
+							if (Number.isFinite(fromCol)) matrix[row][fromCol] -= 1;
+						}
+						if (element.to !== "A") {
+							const toCol = nodeIndex[element.to];
+							if (Number.isFinite(toCol)) matrix[row][toCol] += 1;
+						}
+						matrix[row][nodeVarCount + elementIndex] -= element.R;
+						rhs[row] = -element.E;
+					}
+
+					const solutionVec = this.solveLinearSystem(matrix, rhs);
+					if (!solutionVec) return null;
+
+					const nodeV = { A: 0 };
+					for (const node of nodeNames) {
+						nodeV[node] = solutionVec[nodeIndex[node]];
+					}
+
+					const currentByElementName = {};
+					for (let elementIndex = 0; elementIndex < elementVarCount; elementIndex++) {
+						const element = elements[elementIndex];
+						currentByElementName[element.name] = solutionVec[nodeVarCount + elementIndex];
+					}
+
+					const nodeLabel = (nodeName) => {
+						if (nodeName === "A") return "JA";
+						if (nodeName === "B") return "JB";
+						if (/^N\d+$/.test(nodeName)) return "J" + nodeName;
+						return String(nodeName || "?");
+					};
+					const junctionSectionDebug = elements.map((element) => {
+						const fromV = Number.isFinite(nodeV[element.from]) ? nodeV[element.from] : 0;
+						const toV = Number.isFinite(nodeV[element.to]) ? nodeV[element.to] : 0;
+						const I = currentByElementName[element.name] || 0;
+						return {
+							name: element.name,
+							kind: element.kind,
+							stageIndex: Number.isFinite(element.stageIndex) ? element.stageIndex : null,
+							branchIndex: Number.isFinite(element.branchIndex) ? element.branchIndex : null,
+							from: element.from,
+							to: element.to,
+							fromLabel: nodeLabel(element.from),
+							toLabel: nodeLabel(element.to),
+							R: Number.isFinite(element.R) ? element.R : 0,
+							I,
+							dV: toV - fromV,
+							E: Number.isFinite(element.E) ? element.E : 0
+						};
+					});
+
+					const byId = {};
+					const Ileft = currentByElementName.left || 0;
+					const leftRunV = this.writeBranchReadings(byId, this.state.leftSeries, Ileft, 0);
+
+					const stageNodeV = [];
+					for (let i = 0; i < Math.max(1, stageCount); i++) {
+						stageNodeV.push(nodeV[`N${i}`]);
+					}
+					if (stageCount > 0) {
+						for (let i = 1; i <= stageCount - 1; i++) {
+							if (i < stageCount) stageNodeV[i] = nodeV[`N${i}`];
+						}
+						stageNodeV.push(nodeV.B);
+					}
+
+					for (let stageIndex = 0; stageIndex < stageCount; stageIndex++) {
+						const stage = this.state.stages[stageIndex];
+						const stageTopV = nodeV[`N${stageIndex}`];
+						const stageBottomV = (stageIndex === stageCount - 1) ? nodeV.B : nodeV[`N${stageIndex + 1}`];
+						for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+							const branch = stage.branches[branchIndex];
+							const Ibranch = currentByElementName[`stage_${stageIndex}_branch_${branchIndex}`] || 0;
+							const intrinsicModel = this.branchModelIntrinsic(branch);
+							const isIdealShortBranch = intrinsicModel.R <= EPS_R && Math.abs(intrinsicModel.E) <= EPS_V;
+							if (this.state.useShortSwitchWireResistance && isIdealShortBranch) {
+								const lens = this.getStageBranchWireLengths(stageIndex, branchIndex);
+								const wireDrop = (len) => Ibranch * (len * SHORT_WIRE_R_PER_PIXEL);
+								let vNow = stageTopV;
+								vNow += wireDrop(lens.topBus);
+								vNow += wireDrop(lens.topLead);
+								for (let i = 0; i < branch.length; i++) {
+									const id = branch[i];
+									const bodyLen = lens.bodyById[id] || componentBodyHeight(id);
+									const bodyR = bodyLen * SHORT_WIRE_R_PER_PIXEL;
+									const Vdrop = Ibranch * bodyR - componentEmf(id);
+									const topV = vNow;
+									const bottomV = topV + Vdrop;
+									byId[id] = { I: Ibranch, V: Vdrop, R: bodyR, Vtop: topV, Vbottom: bottomV };
+									vNow = bottomV;
+									if (i < lens.between.length) vNow += wireDrop(lens.between[i]);
+								}
+								vNow += wireDrop(lens.bottomLead);
+								vNow += wireDrop(lens.bottomBus);
+								const snapDiff = stageBottomV - vNow;
+								if (Math.abs(snapDiff) > 1e-6 && branch.length > 0) {
+									const lastId = branch[branch.length - 1];
+									if (byId[lastId]) {
+										byId[lastId].V += snapDiff;
+										byId[lastId].Vbottom += snapDiff;
+									}
+								}
+								continue;
+							}
+
+							if (includeWireR) {
+								const lens = this.getStageBranchWireLengths(stageIndex, branchIndex);
+								const wireDrop = (len) => Ibranch * (len * SHORT_WIRE_R_PER_PIXEL);
+								let vNow = stageTopV;
+								vNow += wireDrop(lens.topBus);
+								vNow += wireDrop(lens.topLead);
+								for (let i = 0; i < branch.length; i++) {
+									const id = branch[i];
+									const R = componentResistance(id);
+									const Vdrop = Ibranch * R - componentEmf(id);
+									const topV = vNow;
+									const bottomV = topV + Vdrop;
+									byId[id] = { I: Ibranch, V: Vdrop, R, Vtop: topV, Vbottom: bottomV };
+									vNow = bottomV;
+									if (i < lens.between.length) vNow += wireDrop(lens.between[i]);
+								}
+								vNow += wireDrop(lens.bottomLead);
+								vNow += wireDrop(lens.bottomBus);
+								const snapDiff = stageBottomV - vNow;
+								if (Math.abs(snapDiff) > 1e-6 && branch.length > 0) {
+									const lastId = branch[branch.length - 1];
+									if (byId[lastId]) {
+										byId[lastId].V += snapDiff;
+										byId[lastId].Vbottom += snapDiff;
+									}
+								}
+								continue;
+							}
+
+							let vNow = stageTopV;
+							this.writeBranchReadings(byId, branch, Ibranch, stageTopV);
+						}
+					}
+
+					// Post-process: zero out current for off-route branches when short-adjusted
+					if (this.state.useShortSwitchWireResistance) {
+						for (let stageIndex = 0; stageIndex < stageCount; stageIndex++) {
+							const stage = this.state.stages[stageIndex];
+							const stageTopV = nodeV[`N${stageIndex}`];
+							const stageBottomV = (stageIndex === stageCount - 1) ? nodeV.B : nodeV[`N${stageIndex + 1}`];
+							for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+								const branch = stage.branches[branchIndex];
+								const intrinsicModel = this.branchModelIntrinsic(branch);
+								const isIdealShortBranch = intrinsicModel.R <= EPS_R && Math.abs(intrinsicModel.E) <= EPS_V;
+								if (isIdealShortBranch) continue; // Skip short branches, they're already processed
+								
+								// For off-route branches: zero current, voltage from junctions
+								const junctionVoltage = stageBottomV - stageTopV;
+								let vNow = stageTopV;
+								const voltage_per_component = branch.length > 0 ? junctionVoltage / branch.length : 0;
+								for (const id of branch) {
+									const R = componentResistance(id);
+									const E = componentEmf(id);
+									// With zero current: Vdrop = 0*R - E, but voltage across is determined by junctions
+									// Distribute junction voltage evenly across components
+									const topV = vNow;
+									const bottomV = topV + voltage_per_component;
+									byId[id] = { I: 0, V: voltage_per_component, R, Vtop: topV, Vbottom: bottomV };
+									vNow = bottomV;
+								}
+							}
+						}
+					}
+
+					const switchVRight = nodeV.N0;
+					const Vext = nodeV.B;
+					const Itotal = -Ileft;
+					const layout = this.state.layout;
+					const hasLayout = !!layout
+						&& Number.isFinite(layout.xCell)
+						&& Number.isFinite(layout.xRight)
+						&& Number.isFinite(layout.bottomBusRightX);
+					const bottomMergeX = hasLayout
+						? layout.bottomBusRightX
+						: 0;
+					const bottomMainLen = hasLayout ? Math.max(0, Math.abs(bottomMergeX - layout.xCell)) : 0;
+					const bottomMainR = bottomMainLen * SHORT_WIRE_R_PER_PIXEL;
+					const bottomRightV = Vext - Itotal * bottomMainR;
+					const { cellTopPlateV, cellBottomPlateV } = this.primaryCellPlateVoltages(byId, 0, Vext);
+					const { vMin, vMax } = this.computeVoltageBounds([0, leftRunV, Vext, switchVRight, bottomRightV], byId);
+
+					return {
+						byId,
+						Itotal,
+						hasInfiniteCurrent: false,
+						stageNodeV,
+						junctionSectionDebug,
+						Vext,
+						switchVLeft: 0,
+						switchVRight,
+						bottomRightV,
+						cellTopPlateV,
+						cellBottomPlateV,
+						vMin,
+						vMax
+					};
+				}
+
+				trySolveMatrixWithOptions(includeWireR) {
+					this.state.useShortSwitchWireResistance = false;
+					const solved = this.solveWithKirchhoffMatrix(includeWireR);
+					return solved ? this.finalizeSolvedSolution(solved) : null;
+				}
+
+				buildWireResistanceDiagnostic(activeSolution) {
+					if (!wireResistanceLabelsEnabled()) return null;
+					const withWire = activeSolution || this.trySolveMatrixWithOptions(true);
+					const withoutWire = this.trySolveMatrixWithOptions(false);
+					if (!withWire || !withoutWire) return null;
+
+					const stageCount = this.state.stages.length;
+					let stageConnectorTotal = 0;
+					if (stageCount === 0) {
+						stageConnectorTotal = this.estimateNoStageRightAndBottomWireResistance();
+					} else {
+						for (let stageIndex = 0; stageIndex < stageCount; stageIndex++) {
+							const stage = this.state.stages[stageIndex];
+							for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+								stageConnectorTotal += this.estimateStageBranchConnectorWireResistance(stageIndex, branchIndex);
+							}
+						}
+					}
+
+					const totalWireR = this.estimateCommonLoopWireResistance(stageCount)
+						+ this.estimateMainSwitchPathWireResistance()
+						+ stageConnectorTotal;
+					const iWith = Number.isFinite(withWire.Itotal) ? withWire.Itotal : withWire.Itotal;
+					const iWithout = Number.isFinite(withoutWire.Itotal) ? withoutWire.Itotal : withoutWire.Itotal;
+					const deltaI = (Number.isFinite(iWith) && Number.isFinite(iWithout)) ? (iWith - iWithout) : NaN;
+
+					return {
+						totalWireR,
+						iWith,
+						iWithout,
+						deltaI
+					};
+				}
+
+			solve() {
+					this.state.useShortSwitchWireResistance = false;
+					let infiniteDetectedBeforeWire = false;
+					let matrixSolved = this.solveWithKirchhoffMatrix();
+					if (matrixSolved) {
+						let solved = this.finalizeSolvedSolution(matrixSolved);
+						if (solutionHasInfiniteCurrent(solved) && !this.solverUsesFullWireResistance()) {
+							infiniteDetectedBeforeWire = true;
+							this.state.useWireResistanceInSolve = true;
+							if (wireResistanceSolveCheck) wireResistanceSolveCheck.checked = true;
+							const withWire = this.solveWithKirchhoffMatrix(true);
+							if (withWire) solved = this.finalizeSolvedSolution(withWire);
+						}
+						this.state.solved = solved;
+						this.state.solved.shortCircuitWarningForced = infiniteDetectedBeforeWire;
+						this.state.solved.wireResistanceDiagnostic = this.buildWireResistanceDiagnostic(this.state.solved);
+						this.onLegendUpdate();
+						return;
+					}
+
+					let fallbackSolved = null;
+					if (!this.state.switchClosed) {
+						fallbackSolved = this.buildOpenSwitchSolution();
+					} else {
+						const stageEquivalents = this.state.stages.map((stage) => this.stageEquivalent(stage));
+						const leftModel = this.branchModel(this.state.leftSeries || []);
+						const netEmf = stageEquivalents.reduce((sum, stageEq) => sum + stageEq.Eeq, 0) - leftModel.E;
+						fallbackSolved = this.buildSelectiveShortCircuitSolution(netEmf)
+							|| this.buildZeroResistanceSolution(netEmf, stageEquivalents);
+					}
+
+					this.state.useShortSwitchWireResistance = false;
+					this.state.solved = this.finalizeSolvedSolution(fallbackSolved || this.buildSingularMatrixDiagnosticSolution());
+					if (solutionHasInfiniteCurrent(this.state.solved) && !this.solverUsesFullWireResistance()) {
+						infiniteDetectedBeforeWire = true;
+						this.state.useWireResistanceInSolve = true;
+						if (wireResistanceSolveCheck) wireResistanceSolveCheck.checked = true;
+						const withWire = this.solveWithKirchhoffMatrix(true);
+						if (withWire) this.state.solved = this.finalizeSolvedSolution(withWire);
+					}
+					this.state.solved.shortCircuitWarningForced = infiniteDetectedBeforeWire;
+					this.state.solved.wireResistanceDiagnostic = this.buildWireResistanceDiagnostic(this.state.solved);
+					this.onLegendUpdate();
+				}
+			}
+
+			const circuitSolver = new CircuitSolver(state, updateLegendText);
 
 			function solveCircuit() {
 				circuitSolver.solve();
@@ -944,36 +2613,32 @@ export class CircuitApp {
 				};
 			}
 
-			function graphDisplayVoltage(v) {
-				// Solver potentials are already rebased so min = 0 V.
-				// invertVoltageAxis flips the vertical axis so the highest potential sits at the floor.
-				if (state.invertVoltageAxis) {
-					const vMax = (state.solved && Number.isFinite(state.solved.vMax)) ? state.solved.vMax : 0;
-					return vMax - v;
-				}
-				return v;
+			function graphReferenceCellVoltage() {
+				const anchorId = placedCellIds()[0];
+				if (!anchorId) return 0;
+				const terminals = cellTerminalVoltages(anchorId);
+				if (!terminals) return 0;
+				return state.invertVoltageAxis ? terminals.positiveV : terminals.negativeV;
 			}
 
-			function actualVoltageFromGraphDisplay(gv) {
-				if (state.invertVoltageAxis) {
-					const vMax = (state.solved && Number.isFinite(state.solved.vMax)) ? state.solved.vMax : 0;
-					return vMax - gv;
-				}
-				return gv;
+			function graphReferenceVoltage() {
+				return graphReferenceCellVoltage();
+			}
+
+			function graphDisplayVoltage(v) {
+				const referenceV = graphReferenceVoltage();
+				return state.invertVoltageAxis ? (referenceV - v) : (v - referenceV);
+			}
+
+			function actualVoltageFromGraphDisplay(graphV) {
+				const referenceV = graphReferenceVoltage();
+				return state.invertVoltageAxis ? (referenceV - graphV) : (referenceV + graphV);
 			}
 
 			function collectGraphFitPointsImpl(layout) {
 				const segs = buildCircuitVoltageSegments(layout);
 				if (!segs.length) return [];
-				let rawVMax = -Infinity;
-				for (const s of segs) {
-					if (Number.isFinite(s.v1) && s.v1 > rawVMax) rawVMax = s.v1;
-					if (Number.isFinite(s.v2) && s.v2 > rawVMax) rawVMax = s.v2;
-				}
-				if (!Number.isFinite(rawVMax)) rawVMax = 0;
-				const graphV = state.invertVoltageAxis
-					? (v) => rawVMax - v
-					: (v) => v;
+				const graphV = graphDisplayVoltage;
 				const points = [
 					{ x: layout.xCell, y: layout.yTop, v: 0 },
 					{ x: layout.xRight, y: layout.yTop, v: 0 },
@@ -1016,16 +2681,12 @@ export class CircuitApp {
 					const ux = (point.x - xRef) * xyScale;
 					const uy = (point.y - yRef) * xyScale;
 					const uz = point.v * zScale;
-					// Apply roll (true 3D y-axis rotation) to 3D coordinates
-					const ux_r = ux * cRoll + uz * sRoll;
-					const uz_r = -ux * sRoll + uz * cRoll;
-					const uy_r = uy;
-					// Apply azimuth (z-axis rotation)
-					const xr = ux_r * cAz - uy_r * sAz;
-					const yr = ux_r * sAz + uy_r * cAz;
-					// Apply elevation projection
-					const sx = xr + uz_r * 0.34 * cEl;
-					const sy = yr * 0.66 - uz_r * sEl;
+					const xr = ux * cAz - uy * sAz;
+					const yr = ux * sAz + uy * cAz;
+					const sx0 = xr + uz * 0.34 * cEl;
+					const sy0 = yr * 0.66 - uz * sEl;
+					const sx = sx0 * cRoll - sy0 * sRoll;
+					const sy = sx0 * sRoll + sy0 * cRoll;
 					if (sx < minX) minX = sx;
 					if (sx > maxX) maxX = sx;
 					if (sy < minY) minY = sy;
@@ -1044,17 +2705,9 @@ export class CircuitApp {
 				if (!bounds) {
 					return { zoom: state.graphZoom, panX: state.graphPanX, panY: state.graphPanY };
 				}
-				const GRAPH_NON_OVERLAP_PADDING = 18;
-				const GRAPH_MAX_VERTICAL_FRACTION = 0.5;
-				const graphBaseCenter = getGraphBaseCenter(layout);
-				const graphCenterX = graphBaseCenter.x;
-				const graphCenterY = graphBaseCenter.y;
-				const noOverlapLeftLimit = layout.circuitRight + GRAPH_NON_OVERLAP_PADDING;
-				const leftLimit = state.potentialGraphMode
-					? Math.max(layout.w * 0.5 + GRAPH_SIDE_MARGIN, noOverlapLeftLimit)
-					: (layout.circuitRight + GRAPH_CIRCUIT_MARGIN);
-				const rightLimit = layout.w - GRAPH_SIDE_MARGIN;
-				const leftRoom = Math.max(GRAPH_SIDE_MARGIN, graphCenterX - leftLimit);
+				const graphCenterX = (layout.circuitRight + layout.w) * 0.5;
+				const graphCenterY = layout.midY;
+				const leftRoom = Math.max(GRAPH_CIRCUIT_MARGIN, graphCenterX - layout.circuitRight - GRAPH_CIRCUIT_MARGIN);
 				const rightRoom = Math.max(GRAPH_SIDE_MARGIN, layout.w - graphCenterX - GRAPH_SIDE_MARGIN);
 				const topRoom = Math.max(GRAPH_VERTICAL_MARGIN, graphCenterY - GRAPH_VERTICAL_MARGIN);
 				const bottomRoom = Math.max(GRAPH_VERTICAL_MARGIN, layout.h - graphCenterY - GRAPH_VERTICAL_MARGIN);
@@ -1065,15 +2718,9 @@ export class CircuitApp {
 				const bottomExtent = Math.max(1e-6, bounds.maxY - centerY);
 				const fitX = Math.min(leftRoom / leftExtent, rightRoom / rightExtent);
 				const fitY = Math.min(topRoom / topExtent, bottomRoom / bottomExtent);
-				const fitAtOne = Math.min(fitX, fitY);
-				const boundsHeightAtOne = Math.max(1e-6, bounds.maxY - bounds.minY);
-				const availableVertical = Math.max(1e-6, topRoom + bottomRoom);
-				const maxZoomByVerticalFraction = (availableVertical * GRAPH_MAX_VERTICAL_FRACTION) / boundsHeightAtOne;
-				const maxZoomByBounds = fitAtOne * GRAPH_AUTO_FIT_SCALE;
-				const zoomUpperBound = Math.min(maxZoomByBounds, maxZoomByVerticalFraction);
-				const zoom = clamp(zoomUpperBound, GRAPH_MIN_AUTO_ZOOM, 4.0);
-				const minPanX = leftLimit - (graphCenterX + bounds.minX * zoom);
-				const maxPanX = rightLimit - (graphCenterX + bounds.maxX * zoom);
+				const zoom = clamp(Math.min(fitX, fitY) * GRAPH_AUTO_FIT_SCALE, GRAPH_MIN_AUTO_ZOOM, 4.0);
+				const minPanX = (layout.circuitRight + GRAPH_CIRCUIT_MARGIN) - (graphCenterX + bounds.minX * zoom);
+				const maxPanX = (layout.w - GRAPH_SIDE_MARGIN) - (graphCenterX + bounds.maxX * zoom);
 				const panX = minPanX <= maxPanX ? clamp(0, minPanX, maxPanX) : minPanX;
 				return {
 					zoom,
@@ -1126,92 +2773,6 @@ export class CircuitApp {
 				return graphViewportController.resetGraphZoomToFit();
 			}
 
-			function computeCircuitViewBounds(layout) {
-				if (!layout) return null;
-				let minX = Number.isFinite(layout.xCell) ? layout.xCell : 0;
-				let maxX = Number.isFinite(layout.circuitRight) ? layout.circuitRight : (Number.isFinite(layout.w) ? layout.w : minX + 1);
-				let minY = Number.isFinite(layout.yTop) ? layout.yTop : 0;
-				let maxY = Number.isFinite(layout.yBottom) ? layout.yBottom : (Number.isFinite(layout.h) ? layout.h : minY + 1);
-
-				if (layout.switchHit) {
-					if (Number.isFinite(layout.switchHit.left)) minX = Math.min(minX, layout.switchHit.left);
-					if (Number.isFinite(layout.switchHit.right)) maxX = Math.max(maxX, layout.switchHit.right);
-					if (Number.isFinite(layout.switchHit.top)) minY = Math.min(minY, layout.switchHit.top);
-					if (Number.isFinite(layout.switchHit.bottom)) maxY = Math.max(maxY, layout.switchHit.bottom);
-				}
-
-				for (const rect of (layout.rects || [])) {
-					if (!rect) continue;
-					if (Number.isFinite(rect.left)) minX = Math.min(minX, rect.left);
-					if (Number.isFinite(rect.right)) maxX = Math.max(maxX, rect.right);
-					if (Number.isFinite(rect.top)) minY = Math.min(minY, rect.top);
-					if (Number.isFinite(rect.bottom)) maxY = Math.max(maxY, rect.bottom);
-				}
-
-				for (const item of (layout.leftSeriesItems || [])) {
-					if (!item) continue;
-					if (Number.isFinite(item.left)) minX = Math.min(minX, item.left);
-					if (Number.isFinite(item.right)) maxX = Math.max(maxX, item.right);
-					if (Number.isFinite(item.top)) minY = Math.min(minY, item.top);
-					if (Number.isFinite(item.bottom)) maxY = Math.max(maxY, item.bottom);
-				}
-
-				if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
-					return null;
-				}
-
-				return { minX, maxX, minY, maxY };
-			}
-
-			function autoFitCircuitViewToCanvas() {
-				rebuildLayout();
-				if (!state.layout) return;
-				const bounds = computeCircuitViewBounds(state.layout);
-				if (!bounds) return;
-				const rect = canvasWrap.getBoundingClientRect();
-				if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width < 8 || rect.height < 8) return;
-
-				const paddingX = 24;
-				const paddingTop = 98;
-				const paddingBottom = 88;
-				const spanX = Math.max(1e-6, bounds.maxX - bounds.minX);
-				const spanY = Math.max(1e-6, bounds.maxY - bounds.minY);
-				const fitX = Math.max(1e-6, (rect.width - paddingX * 2) / spanX);
-				const fitY = Math.max(1e-6, (rect.height - paddingTop - paddingBottom) / spanY);
-				const fitZoom = clamp(Math.min(fitX, fitY) * 0.98, 0.25, 4.0);
-				const defaultViewZoom = 1;
-
-				// Auto behavior rules:
-				// 1) Zoom out when circuit does not fit current zoom.
-				// 2) If currently zoomed out below default and space allows, zoom back to default only.
-				let targetZoom = state.viewZoom;
-				if (fitZoom < state.viewZoom) {
-					targetZoom = fitZoom;
-				} else if (state.viewZoom < defaultViewZoom && fitZoom >= defaultViewZoom) {
-					targetZoom = defaultViewZoom;
-				}
-
-				const zoomChanged = Math.abs(targetZoom - state.viewZoom) >= 1e-6;
-
-				const usedW = spanX * targetZoom;
-				const usedH = spanY * targetZoom;
-				if (zoomChanged) {
-					state.viewZoom = targetZoom;
-				}
-				// Preserve default horizontal placement (zoom=1, panX=0) by fixing the
-				// left circuit bound at its default screen x-position.
-				if (state.potentialGraphMode) {
-					const targetCenterX = rect.width * 0.25;
-					const boundsCenterX = (bounds.minX + bounds.maxX) * 0.5;
-					state.viewPanX = targetCenterX - boundsCenterX * targetZoom;
-				} else {
-					state.viewPanX = bounds.minX * (1 - targetZoom);
-				}
-				const verticalSpace = Math.max(0, rect.height - paddingTop - paddingBottom - usedH);
-				const topOffset = paddingTop + verticalSpace * 0.5;
-				state.viewPanY = topOffset - bounds.minY * targetZoom;
-			}
-
 			function drawGrid(w, h) {
 				ctx.save();
 				ctx.strokeStyle = "rgba(120, 120, 120, 0.13)";
@@ -1232,12 +2793,12 @@ export class CircuitApp {
 			}
 
 			function voltageToColor(v) {
+				const rawMin = Number.isFinite(state.solved.vMin) ? state.solved.vMin : 0;
+				const rawMax = Number.isFinite(state.solved.vMax) ? state.solved.vMax : 1;
 				const displayV = graphDisplayVoltage(v);
-				const scale = state.graphColorScale || { displayMin: 0, displayMax: 1, maxAbs: 1 };
-				const maxAbs = Math.max(1e-6,
-					Number.isFinite(scale.maxAbs) ? scale.maxAbs : 1,
-					Math.abs(Number.isFinite(scale.displayMin) ? scale.displayMin : 0),
-					Math.abs(Number.isFinite(scale.displayMax) ? scale.displayMax : 1));
+				const minV = Math.min(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
+				const maxV = Math.max(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
+				const maxAbs = Math.max(1e-6, Math.abs(minV), Math.abs(maxV));
 				const signed = clamp(displayV / maxAbs, -1, 1);
 				const hue = 60 + 60 * signed;
 				return `hsl(${hue}, 85%, 42%)`;
@@ -1272,7 +2833,7 @@ export class CircuitApp {
 			}
 
 			function branchGroupingLabelsEnabled() {
-				return !!state.debugLabels;
+				return !!state.useWireResistanceInSolve && !!state.debugLabels;
 			}
 
 			function buildComponentBranchGroupMap(layout) {
@@ -1738,9 +3299,333 @@ export class CircuitApp {
 			}
 
 			function applyKirchhoffSectionSolve(layout) {
-			if (!kirchhoffSolverInstance) return null;
-			return kirchhoffSolverInstance.applyKirchhoffSectionSolve(layout);
-		}
+				if (!layout || !state.solved) return null;
+				const routeGraphForSections = buildCircuitRouteGraph(layout);
+				let graphRouteRows = (routeGraphForSections && Array.isArray(routeGraphForSections.routes))
+					? routeGraphForSections.routes.map((route, idx) => ({
+						from: route.from,
+						to: route.to,
+						R: Math.max(0, Number.isFinite(route.R) ? route.R : 0),
+						E: Number.isFinite(route.E) ? route.E : 0,
+						parts: Array.isArray(route.parts) ? route.parts : [],
+						routeKey: route.routeKey || `${route.from || "?"}|${route.to || "?"}`,
+						routeIndex: idx,
+						isGraphRoute: true
+					}))
+					: [];
+				if (!graphRouteRows.length) {
+					const allSegs = buildCircuitVoltageSegments(layout);
+					const loopParts = [];
+					let totalR = 0;
+					const seenComp = new Set();
+					for (const seg of allSegs) {
+						if (!seg) continue;
+						if (!Number.isFinite(seg.x1) || !Number.isFinite(seg.y1) || !Number.isFinite(seg.x2) || !Number.isFinite(seg.y2)) continue;
+						loopParts.push({
+							x1: seg.x1,
+							y1: seg.y1,
+							x2: seg.x2,
+							y2: seg.y2,
+							travDx: seg.x2 - seg.x1,
+							travDy: seg.y2 - seg.y1
+						});
+						if (seg.componentId && seg.role === "component-main") {
+							if (seenComp.has(seg.componentId)) continue;
+							seenComp.add(seg.componentId);
+							const componentId = seg.componentId;
+							const componentR = isBranchSwitch(componentId)
+								? componentIntrinsicResistance(componentId)
+								: componentResistance(componentId);
+							totalR += Math.max(0, componentR);
+							continue;
+						}
+						if (seg.componentId && seg.role === "switch-blade" && isComponentSwitchClosed(seg.componentId)) {
+							const bladeLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+							totalR += Math.max(0, bladeLen * SHORT_WIRE_R_PER_PIXEL);
+							continue;
+						}
+					}
+					const routeGraphEdges = routeGraphForSections && Array.isArray(routeGraphForSections.edges)
+						? routeGraphForSections.edges
+						: [];
+					for (const edge of routeGraphEdges) {
+						const srcSeg = routeGraphForSections && Array.isArray(routeGraphForSections.segments)
+							? routeGraphForSections.segments[edge.sourceSegmentIndex]
+							: null;
+						if (srcSeg && (srcSeg.role === "component-main" || srcSeg.role === "switch-blade") && srcSeg.componentId) continue;
+						const baseLen = Math.hypot(edge.x2 - edge.x1, edge.y2 - edge.y1);
+						if (!(baseLen > 0)) continue;
+						const nodeA = routeGraphForSections.nodeByKey && routeGraphForSections.nodeByKey.get(edge.nodeA);
+						const nodeB = routeGraphForSections.nodeByKey && routeGraphForSections.nodeByKey.get(edge.nodeB);
+						const edgeOrientationAtNode = (node, other) => {
+							if (!node || !other) return null;
+							const dx = other.x - node.x;
+							const dy = other.y - node.y;
+							return Math.abs(dx) >= Math.abs(dy) ? "h" : "v";
+						};
+						const nodeIsCornerOrMultiJunction = (nodeKey, node) => {
+							if (!node) return false;
+							const incident = routeGraphForSections.adjacency && routeGraphForSections.adjacency.get(nodeKey)
+								? routeGraphForSections.adjacency.get(nodeKey)
+								: [];
+							if (incident.length > 2) return true;
+							if (incident.length !== 2) return false;
+							const e1 = routeGraphForSections.edges[incident[0]];
+							const e2 = routeGraphForSections.edges[incident[1]];
+							const n1 = routeGraphForSections.nodeByKey.get(e1.nodeA === nodeKey ? e1.nodeB : e1.nodeA);
+							const n2 = routeGraphForSections.nodeByKey.get(e2.nodeA === nodeKey ? e2.nodeB : e2.nodeA);
+							const o1 = edgeOrientationAtNode(node, n1);
+							const o2 = edgeOrientationAtNode(node, n2);
+							return !!(o1 && o2 && o1 !== o2);
+						};
+						let trim = 0;
+						if (nodeIsCornerOrMultiJunction(edge.nodeA, nodeA)) trim += GRAPH_PATH_HALF_WIDTH;
+						if (nodeIsCornerOrMultiJunction(edge.nodeB, nodeB)) trim += GRAPH_PATH_HALF_WIDTH;
+						totalR += Math.max(0, (baseLen - trim) * SHORT_WIRE_R_PER_PIXEL);
+					}
+					const loopI = Number.isFinite(state.solved.Itotal) ? state.solved.Itotal : 0;
+					const loopR = Math.max(1e-12, totalR);
+					graphRouteRows = [{
+						from: "J1",
+						to: "J1",
+						R: loopR,
+						E: loopI * loopR,
+						parts: loopParts,
+						routeKey: "J1|J1",
+						routeIndex: 0,
+						isGraphRoute: true,
+						isSeriesFallback: true
+					}];
+				}
+
+				const solveJunctionNetwork = (rows) => {
+					if (!rows || rows.length === 0) return null;
+					const allNodes = new Set();
+					for (const r of rows) {
+						if (r.from && r.from !== "?") allNodes.add(r.from);
+						if (r.to && r.to !== "?") allNodes.add(r.to);
+					}
+					if (allNodes.size < 2) return null;
+					const emfRow = rows.find((r) => Math.abs(Number.isFinite(r.E) ? r.E : 0) > 1e-6);
+					let groundNode = emfRow ? emfRow.from : [...allNodes][0];
+					if (!allNodes.has(groundNode)) groundNode = [...allNodes][0];
+					const nodeList = [...allNodes].filter((n) => n !== groundNode);
+					const nodeIdx = new Map();
+					nodeList.forEach((n, i) => nodeIdx.set(n, i));
+					const N = nodeList.length;
+					const YMat = Array.from({ length: N }, () => new Array(N).fill(0));
+					const bVec = new Array(N).fill(0);
+					for (const r of rows) {
+						const fr = r.from, to = r.to;
+						if (!fr || !to || fr === "?" || to === "?") continue;
+						const R = Math.max(1e-9, Number.isFinite(r.R) ? r.R : 1e-9);
+						const E = Number.isFinite(r.E) ? r.E : 0;
+						const G = 1 / R;
+						const fi = fr === groundNode ? -1 : (nodeIdx.has(fr) ? nodeIdx.get(fr) : -2);
+						const ti = to === groundNode ? -1 : (nodeIdx.has(to) ? nodeIdx.get(to) : -2);
+						if (fi === -2 || ti === -2) continue;
+						if (fi >= 0) YMat[fi][fi] += G;
+						if (ti >= 0) YMat[ti][ti] += G;
+						if (fi >= 0 && ti >= 0) { YMat[fi][ti] -= G; YMat[ti][fi] -= G; }
+						// Rise-convention for section EMF: dV(from->to) = E - I*R.
+						// Nodal source contribution signs follow I(from->to) = (E + Vf - Vt) / R.
+						if (fi >= 0) bVec[fi] -= G * E;
+						if (ti >= 0) bVec[ti] += G * E;
+					}
+					const aug = YMat.map((row, i) => [...row, bVec[i]]);
+					for (let col = 0; col < N; col++) {
+						let maxRow = col;
+						for (let r = col + 1; r < N; r++) {
+							if (Math.abs(aug[r][col]) > Math.abs(aug[maxRow][col])) maxRow = r;
+						}
+						[aug[col], aug[maxRow]] = [aug[maxRow], aug[col]];
+						if (Math.abs(aug[col][col]) < 1e-15) continue;
+						for (let r = 0; r < N; r++) {
+							if (r === col) continue;
+							const f = aug[r][col] / aug[col][col];
+							for (let c = col; c <= N; c++) aug[r][c] -= f * aug[col][c];
+						}
+					}
+					const nodeV = new Map([[groundNode, 0]]);
+					for (let i = 0; i < N; i++) {
+						nodeV.set(nodeList[i], Math.abs(aug[i][i]) > 1e-15 ? aug[i][N] / aug[i][i] : 0);
+					}
+					const branchResults = rows.map((r) => {
+						const Vf = nodeV.has(r.from) ? nodeV.get(r.from) : 0;
+						const Vt = nodeV.has(r.to) ? nodeV.get(r.to) : 0;
+						const R = Math.max(0, Number.isFinite(r.R) ? r.R : 0);
+						const E = Number.isFinite(r.E) ? r.E : 0;
+						const I = R > 1e-12 ? (E + Vf - Vt) / R : 0;
+						const Vr = -I * R;
+						const netPd = Vr + E;
+						return { I, Vr, netPd };
+					});
+					return { nodeV, branchResults };
+				};
+
+				const sectionRows = graphRouteRows;
+				let networkSolution = solveJunctionNetwork(sectionRows);
+				if (!networkSolution && sectionRows.length === 1 && sectionRows[0].isSeriesFallback === true) {
+					const row = sectionRows[0];
+					const I = Number.isFinite(state.solved.Itotal)
+						? state.solved.Itotal
+						: (row.R > 1e-12 ? (row.E / row.R) : 0);
+					networkSolution = {
+						nodeV: new Map([["J1", 0]]),
+						branchResults: [{ I, Vr: I * row.R, netPd: 0 }]
+					};
+				}
+				if (!networkSolution) {
+					state.solved.kirchhoffSectionData = null;
+					return null;
+				}
+
+				const visibleResistanceSegments = buildCircuitVoltageSegments(layout);
+				const overlap1D = (a1, a2, b1, b2) => {
+					const lo = Math.max(Math.min(a1, a2), Math.min(b1, b2));
+					const hi = Math.min(Math.max(a1, a2), Math.max(b1, b2));
+					return Math.max(0, hi - lo);
+				};
+				const partOverlapsSegment = (part, seg, eps = 1.25) => {
+					if (!part || !seg) return false;
+					const pdx = part.x2 - part.x1;
+					const pdy = part.y2 - part.y1;
+					const sdx = seg.x2 - seg.x1;
+					const sdy = seg.y2 - seg.y1;
+					const partH = Math.abs(pdx) >= Math.abs(pdy);
+					const segH = Math.abs(sdx) >= Math.abs(sdy);
+					if (partH !== segH) return false;
+					if (partH) {
+						if (Math.abs(((part.y1 + part.y2) * 0.5) - ((seg.y1 + seg.y2) * 0.5)) > eps) return false;
+						return overlap1D(part.x1, part.x2, seg.x1, seg.x2) > eps;
+					}
+					if (Math.abs(((part.x1 + part.x2) * 0.5) - ((seg.x1 + seg.x2) * 0.5)) > eps) return false;
+					return overlap1D(part.y1, part.y2, seg.y1, seg.y2) > eps;
+				};
+
+				const emfIdx = sectionRows.findIndex((r) => Math.abs(Number.isFinite(r.E) ? r.E : 0) > 1e-6);
+				if (emfIdx >= 0) {
+					const bRes = networkSolution.branchResults[emfIdx];
+					if (bRes && Number.isFinite(bRes.I)) {
+						state.solved.Itotal = bRes.I;
+					}
+				}
+
+				if (state.solved.byId) {
+					const globallyAssignedComp = new Set();
+					const geometryArrowAlignFactor = (row, rowParts, seg) => {
+						if (!seg || !Array.isArray(rowParts) || !rowParts.length) return null;
+						const segDx = (Number.isFinite(seg.x2) ? seg.x2 : 0) - (Number.isFinite(seg.x1) ? seg.x1 : 0);
+						const segDy = (Number.isFinite(seg.y2) ? seg.y2 : 0) - (Number.isFinite(seg.y1) ? seg.y1 : 0);
+						if (Math.hypot(segDx, segDy) <= 0.5) return null;
+						for (const part of rowParts) {
+							if (!partOverlapsSegment(part, seg)) continue;
+							const travDx = Number.isFinite(part.travDx) ? part.travDx
+								: ((Number.isFinite(part.x2) && Number.isFinite(part.x1)) ? (part.x2 - part.x1) : NaN);
+							const travDy = Number.isFinite(part.travDy) ? part.travDy
+								: ((Number.isFinite(part.y2) && Number.isFinite(part.y1)) ? (part.y2 - part.y1) : NaN);
+							if (!Number.isFinite(travDx) || !Number.isFinite(travDy) || Math.hypot(travDx, travDy) <= 0.5) continue;
+							const dot = travDx * segDx + travDy * segDy;
+							if (Math.abs(dot) <= 1e-12) continue;
+							const dotSign = dot >= 0 ? 1 : -1;
+							return -dotSign * (row.sectionFlipped ? -1 : 1);
+						}
+						return null;
+					};
+					for (let ri = 0; ri < sectionRows.length; ri++) {
+						const row = sectionRows[ri];
+						const bRes = networkSolution.branchResults[ri];
+						if (!bRes || !Number.isFinite(bRes.I)) continue;
+						const sectionI = bRes.I;
+						const rowParts = Array.isArray(row.parts) ? row.parts : [];
+						if (!rowParts.length) continue;
+						const seenComp = new Set();
+						for (const seg of visibleResistanceSegments) {
+							if (!seg.componentId) continue;
+							const isMappedComponentRole = seg.role === "component-main" || seg.role === "switch-blade";
+							if (!isMappedComponentRole) continue;
+							let hit = false;
+							for (const part of rowParts) {
+								if (partOverlapsSegment(part, seg)) { hit = true; break; }
+							}
+							if (!hit) continue;
+							if (seenComp.has(seg.componentId)) continue;
+							seenComp.add(seg.componentId);
+							const cid = seg.componentId;
+							if (globallyAssignedComp.has(cid)) continue;
+							if (!state.solved.byId[cid]) continue;
+							const existingSol = state.solved.byId[cid];
+							const cR = componentResistance(cid);
+							const cEmf = Number.isFinite(componentEmf(cid)) ? componentEmf(cid) : 0;
+							// arrowAlignFactor: multiply sol.I by this before passing to drawCurrentArrow.
+							// Convention: effectiveI > 0 → arrow DOWN; effectiveI < 0 → arrow UP.
+							let arrowAlignFactor = 1;
+							if (row.isSeriesFallback) {
+								const existingI = existingSol && Number.isFinite(existingSol.I) ? existingSol.I : sectionI;
+								const geometryAlign = geometryArrowAlignFactor(row, rowParts, seg);
+								if (Number.isFinite(geometryAlign)) {
+									arrowAlignFactor = geometryAlign;
+								} else {
+								const existingDv = existingSol
+									&& Number.isFinite(existingSol.Vtop)
+									&& Number.isFinite(existingSol.Vbottom)
+									? (existingSol.Vbottom - existingSol.Vtop)
+									: (existingSol && Number.isFinite(existingSol.V) ? existingSol.V : NaN);
+								let desiredEffectiveI = NaN;
+								if (Number.isFinite(existingDv) && Math.abs(existingDv) > 1e-12) {
+									desiredEffectiveI = (Math.abs(cEmf) > 1e-6) ? existingDv : -existingDv;
+								}
+								if (Number.isFinite(desiredEffectiveI) && Math.abs(desiredEffectiveI) > 1e-12
+									&& Number.isFinite(existingI) && Math.abs(existingI) > 1e-12) {
+									arrowAlignFactor = Math.sign(desiredEffectiveI) === Math.sign(existingI) ? 1 : -1;
+								} else {
+									arrowAlignFactor = (Math.abs(cEmf) > 1e-6) ? -1 : 1;
+								}
+								}
+							} else {
+								// Use per-part traversal direction stored in routeParts.
+								// travDy < 0: section traversal goes upward through this part.
+								// Dot with seg direction (segDy > 0 = normal top-to-bottom component).
+								// If sectionFlipped, canonical direction is opposite traversal — negate.
+								const segDy = seg.y2 - seg.y1;
+								if (Math.abs(segDy) > 0.5) {
+									for (const part of rowParts) {
+										if (partOverlapsSegment(part, seg)) {
+											if (Number.isFinite(part.travDy) && Math.abs(part.travDy) > 0.5) {
+												const dotSign = (part.travDy * segDy >= 0) ? 1 : -1;
+												arrowAlignFactor = dotSign * (row.sectionFlipped ? -1 : 1);
+											}
+											break;
+										}
+									}
+								}
+							}
+							const existingDeltaV = (existingSol
+								&& Number.isFinite(existingSol.Vtop)
+								&& Number.isFinite(existingSol.Vbottom))
+								? (existingSol.Vbottom - existingSol.Vtop)
+								: NaN;
+							if (row.isSeriesFallback && existingSol && Number.isFinite(existingSol.I)) {
+								state.solved.byId[cid].I = existingSol.I;
+								state.solved.byId[cid].V = Number.isFinite(existingDeltaV)
+									? existingDeltaV
+									: (Number.isFinite(existingSol.V) ? existingSol.V : (sectionI * cR - cEmf));
+								state.solved.byId[cid].arrowAlignFactor = arrowAlignFactor;
+							} else {
+								state.solved.byId[cid].I = sectionI;
+								state.solved.byId[cid].V = Number.isFinite(existingDeltaV)
+									? existingDeltaV
+									: (sectionI * cR - cEmf);
+								state.solved.byId[cid].arrowAlignFactor = arrowAlignFactor;
+							}
+							globallyAssignedComp.add(cid);
+						}
+					}
+				}
+
+				state.solved.kirchhoffSectionData = { sectionRows, networkSolution };
+				return state.solved.kirchhoffSectionData;
+			}
 
 			function drawQueuedWireResistanceLabels(layout) {
 				if (!layout) return;
@@ -1839,15 +3724,15 @@ export class CircuitApp {
 					const dy = (Number.isFinite(seg.y2) ? seg.y2 : 0) - (Number.isFinite(seg.y1) ? seg.y1 : 0);
 					const horizontal = Math.abs(dx) >= Math.abs(dy);
 					if (!Number.isFinite(currentValue) || Math.abs(currentValue) <= 1e-12) {
-						return horizontal ? "\u2194" : "\u2195";
+						return horizontal ? "↔" : "↕";
 					}
 					if (horizontal) {
-						const forward = dx >= 0 ? "\u2192" : "\u2190";
-						const reverse = dx >= 0 ? "\u2190" : "\u2192";
+						const forward = dx >= 0 ? "→" : "←";
+						const reverse = dx >= 0 ? "←" : "→";
 						return currentValue >= 0 ? forward : reverse;
 					}
-					const forward = dy >= 0 ? "\u2193" : "\u2191";
-					const reverse = dy >= 0 ? "\u2191" : "\u2193";
+					const forward = dy >= 0 ? "↓" : "↑";
+					const reverse = dy >= 0 ? "↑" : "↓";
 					return currentValue >= 0 ? forward : reverse;
 				};
 				const kirchhoffDataForLabels = state && state.solved ? state.solved.kirchhoffSectionData : null;
@@ -1897,7 +3782,6 @@ export class CircuitApp {
 					for (const [k, cur] of Object.entries(routedSegmentCurrentByIndex)) {
 						const seg = segments[Number(k)];
 						if (!seg || !Number.isFinite(cur)) continue;
-						if (seg.role === "component-main" || seg.role === "switch-blade") continue;
 						if (!Number.isFinite(seg.v1) || !Number.isFinite(seg.v2)) continue;
 						const dv = seg.v2 - seg.v1;
 						if (Math.abs(dv) <= 1e-12) continue;
@@ -1959,7 +3843,6 @@ export class CircuitApp {
 					let orientationMetric = 0;
 					for (const [k, sgn] of Object.entries(seriesLoopCurrentSignBySegmentIndex)) {
 						const seg = segments[Number(k)];
-						if (!seg || seg.role === "component-main" || seg.role === "switch-blade") continue;
 						if (!seg || !Number.isFinite(seg.v1) || !Number.isFinite(seg.v2)) continue;
 						const dv = seg.v2 - seg.v1;
 						if (Math.abs(dv) <= 1e-12) continue;
@@ -2242,13 +4125,8 @@ export class CircuitApp {
 					const resistiveDirected = Number.isFinite(wireI)
 						? (-Math.abs(wireI) * segmentR)
 						: NaN;
-					const cellEmfMagnitude = (isCellEmfSegment && Number.isFinite(componentEmf(seg.componentId)))
-						? Math.abs(componentEmf(seg.componentId))
-						: NaN;
 					const pdPlusEmfDirected = isCellEmfSegment
-						? (Number.isFinite(cellEmfMagnitude)
-							? cellEmfMagnitude
-							: (Number.isFinite(pdSignedValue) ? Math.abs(pdSignedValue) : NaN))
+						? (Number.isFinite(pdSignedValue) ? Math.abs(pdSignedValue) : NaN)
 						: (Number.isFinite(resistiveDirected)
 							? resistiveDirected
 						: (Number.isFinite(pdSignedValue)
@@ -2440,7 +4318,6 @@ export class CircuitApp {
 			function drawSwitch(layout) {
 				const y = layout.yTop;
 				const x = layout.xSwitch;
-				const switchClosed = isComponentSwitchClosed(MAIN_SWITCH_ID);
 				const hasTopBoundaryParallelStage = layout.stages.length > 0
 					&& Array.isArray(layout.stages[0].branches)
 					&& layout.stages[0].branches.length > 1;
@@ -2457,15 +4334,14 @@ export class CircuitApp {
 					drawWireSegment(layout.xRight, y, layout.topBusRightX, y, networkTopV, networkTopV, "TOP_SPLIT_BUS");
 				}
 				ctx.save();
-				ctx.lineWidth = 5;
+				ctx.lineWidth = 4;
 				ctx.lineCap = "round";
+				const bladeEndY = state.switchClosed ? y : (y - 14);
 				const bladeStartX = x - 16;
-				const bladeStartY = y;
-				const bladeEndX = switchClosed ? (x + 16) : (x + 8);
-				const bladeEndY = switchClosed ? y : (y - 16);
-				const bladeEndV = switchClosed ? rightV : leftV;
+				const bladeEndX = state.switchClosed ? (x + 16) : (x + 14);
+				const bladeEndV = state.switchClosed ? rightV : leftV;
 				if (state.voltageColorMode) {
-					const bladeGrad = ctx.createLinearGradient(bladeStartX, bladeStartY, bladeEndX, bladeEndY);
+					const bladeGrad = ctx.createLinearGradient(bladeStartX, y, bladeEndX, bladeEndY);
 					bladeGrad.addColorStop(0, voltageToColor(leftV));
 					bladeGrad.addColorStop(1, voltageToColor(bladeEndV));
 					ctx.strokeStyle = bladeGrad;
@@ -2473,17 +4349,17 @@ export class CircuitApp {
 					ctx.strokeStyle = "#111";
 				}
 				ctx.beginPath();
-				ctx.moveTo(bladeStartX, bladeStartY);
+				ctx.moveTo(bladeStartX, y);
 				ctx.lineTo(bladeEndX, bladeEndY);
 				ctx.stroke();
-				enqueueWireResistanceSegment(bladeStartX, bladeStartY, bladeEndX, bladeEndY, "switch-blade");
+				enqueueWireResistanceSegment(bladeStartX, y, bladeEndX, bladeEndY, "switch-blade");
 				ctx.fillStyle = state.voltageColorMode ? voltageToColor(leftV) : "#111";
 				ctx.beginPath();
-				ctx.arc(x - 16, y, 3.6, 0, Math.PI * 2);
+				ctx.arc(x - 16, y, 4, 0, Math.PI * 2);
 				ctx.fill();
 				ctx.fillStyle = state.voltageColorMode ? voltageToColor(rightV) : "#111";
 				ctx.beginPath();
-				ctx.arc(x + 16, y, 3.6, 0, Math.PI * 2);
+				ctx.arc(x + 16, y, 4, 0, Math.PI * 2);
 				ctx.fill();
 				ctx.restore();
 			}
@@ -3054,7 +4930,7 @@ export class CircuitApp {
 				const midY = wireBottom - 18;
 				const SH = 5.33;
 				const arrowX = x + 12;
-				// Convention: effectiveI > 0 ? arrow DOWN; effectiveI < 0 ? arrow UP.
+				// Convention: effectiveI > 0 → arrow DOWN; effectiveI < 0 → arrow UP.
 				// Caller pre-multiplies sol.I by sol.arrowAlignFactor before calling here.
 				const arrowDir = I < 0 ? -1 : 1;
 				const tipY = midY + arrowDir * SH;
@@ -3505,6 +5381,26 @@ export class CircuitApp {
 				}
 			}
 
+			function shouldUseUniformShortCircuitLoopGradient(_layout) {
+				return false;
+			}
+
+			function shouldUseTracedShortCircuitLoopGradient(_layout) {
+				return false;
+			}
+
+			function findTracedShortLoopBranch(_layout) {
+				return null;
+			}
+
+			function appendUniformShortCircuitLoopSegments(_segments, _layout, _startY, _startV, _endV, _endY) {}
+
+			function appendTracedShortCircuitLoopSegments(_segments, _layout, _startY, _startV, _endV, _endY) {}
+
+			function shortLoopEndAnchor(_layout, _solved, _fallbackY, _fallbackV) {
+				return { y: 0, v: 0 };
+			}
+
 			function leftRailConductiveRuns(layout, fromY, toY) {
 				const yStart = Math.min(fromY, toY);
 				const yEnd = Math.max(fromY, toY);
@@ -3869,6 +5765,8 @@ export class CircuitApp {
 				const topPlateV = Number.isFinite(solved.cellTopPlateV) ? solved.cellTopPlateV : topNodeV;
 				const bottomNodeV = Number.isFinite(solved.Vext) ? solved.Vext : 0;
 				let bottomRightV = Number.isFinite(solved.bottomRightV) ? solved.bottomRightV : bottomNodeV;
+				const useUniformShortCircuitLoopGradient = shouldUseUniformShortCircuitLoopGradient(layout);
+				const useTracedShortCircuitLoopGradient = shouldUseTracedShortCircuitLoopGradient(layout);
 				const hasTopBoundaryParallelStage = layout.stages.length > 0
 					&& Array.isArray(layout.stages[0].branches)
 					&& layout.stages[0].branches.length > 1;
@@ -3910,65 +5808,50 @@ export class CircuitApp {
 					}
 				}
 
-				// Gradient covers xCell -> gradientEndX only.
-				// If a parallel stage has branches to the left of xRight, topBusRightX < xRight and
-				// the split bus (topBusRightX -> xRight) is 0-ohm, so it must be flat, not part of the slope.
-				const gradientEndX = Math.min(layout.topBusRightX, layout.xRight);
-				const topBusXSpan = gradientEndX - layout.xCell;
-				const topBusVAtX = (x) => topBusXSpan > 1e-6
-					? leftTopV + (networkTopV - leftTopV) * (x - layout.xCell) / topBusXSpan
-					: leftTopV;
-				const mainSwitchClosed = isComponentSwitchClosed(MAIN_SWITCH_ID);
-				// Top bus left: xCell -> xSwitch-16
-				if (layout.xCell < layout.xSwitch - 16 - 1e-6) {
-					if (mainSwitchClosed) {
+				if (!useUniformShortCircuitLoopGradient) {
+					// Gradient covers xCell -> gradientEndX only.
+					// If a parallel stage has branches to the left of xRight, topBusRightX < xRight and
+					// the split bus (topBusRightX -> xRight) is 0-ohm, so it must be flat, not part of the slope.
+					const gradientEndX = Math.min(layout.topBusRightX, layout.xRight);
+					const topBusXSpan = gradientEndX - layout.xCell;
+					const topBusVAtX = (x) => topBusXSpan > 1e-6
+						? leftTopV + (networkTopV - leftTopV) * (x - layout.xCell) / topBusXSpan
+						: leftTopV;
+					// Top bus left: xCell -> xSwitch-16
+					if (layout.xCell < layout.xSwitch - 16 - 1e-6) {
 						segments.push({ x1: layout.xCell, y1: layout.yTop, x2: layout.xSwitch - 16, y2: layout.yTop, v1: leftTopV, v2: topBusVAtX(layout.xSwitch - 16) });
-					} else {
-						segments.push({
-							x1: layout.xCell,
-							y1: layout.yTop,
-							x2: layout.xSwitch - 16,
-							y2: layout.yTop,
-							v1: leftV,
-							v2: leftV,
-							role: "switch-open-node-wire",
-							componentId: "MAIN_SWITCH",
-							isFlatVoltage: true
-						});
 					}
-				}
-				// Switch blade
-				const bladeRightX = mainSwitchClosed ? (layout.xSwitch + 16) : (layout.xSwitch + 8);
-				const bladeRightY = mainSwitchClosed ? layout.yTop : (layout.yTop - 16);
-				const rightContactX = layout.xSwitch + 16;
-				const bladeLeftV = mainSwitchClosed ? topBusVAtX(layout.xSwitch - 16) : leftV;
-				const bladeRightV = mainSwitchClosed ? topBusVAtX(Math.min(layout.xSwitch + 16, gradientEndX)) : bladeLeftV;
-				const rightContactV = mainSwitchClosed ? topBusVAtX(Math.min(rightContactX, gradientEndX)) : (Number.isFinite(rightV) ? rightV : networkTopV);
-				segments.push({
-					x1: layout.xSwitch - 16,
-					y1: layout.yTop,
-					x2: bladeRightX,
-					y2: bladeRightY,
-					v1: bladeLeftV,
-					v2: bladeRightV,
-					role: "switch-blade",
-					componentId: "MAIN_SWITCH",
-					isFlatVoltage: !mainSwitchClosed
-				});
-				// Top bus right fixed contact wire: xSwitch+16 -> gradientEndX.
-				// Keep this segment even when open so the right-side node stays anchored at the contact.
-				if (rightContactX < gradientEndX - 1e-6) {
-					segments.push({ x1: rightContactX, y1: layout.yTop, x2: gradientEndX, y2: layout.yTop, v1: rightContactV, v2: networkTopV });
-				}
-				// Split bus flat: gradientEndX -> xRight (when branches extend leftward inside the circuit)
-				// If the top boundary is parallel, that segment is already represented by
-				// stage split-bus segments; avoid adding an overlapping duplicate segment.
-				if (!hasTopBoundaryParallelStage && gradientEndX < layout.xRight - 1e-6) {
-					segments.push({ x1: gradientEndX, y1: layout.yTop, x2: layout.xRight, y2: layout.yTop, v1: networkTopV, v2: networkTopV });
-				}
-				// Split bus extension: xRight -> topBusRightX (flat, when branches extend rightward beyond xRight)
-				if (!hasTopBoundaryParallelStage && layout.xRight < layout.topBusRightX - 1e-6) {
-					segments.push({ x1: layout.xRight, y1: layout.yTop, x2: layout.topBusRightX, y2: layout.yTop, v1: networkTopV, v2: networkTopV });
+					// Switch blade
+					const bladeRightX = state.switchClosed ? (layout.xSwitch + 16) : (layout.xSwitch + 14);
+					const bladeRightY = state.switchClosed ? layout.yTop : (layout.yTop - 14);
+					const rightContactX = layout.xSwitch + 16;
+					const bladeLeftV = topBusVAtX(layout.xSwitch - 16);
+					const bladeRightV = state.switchClosed ? topBusVAtX(Math.min(layout.xSwitch + 16, gradientEndX)) : bladeLeftV;
+					const rightContactV = state.switchClosed ? topBusVAtX(Math.min(rightContactX, gradientEndX)) : (Number.isFinite(rightV) ? rightV : networkTopV);
+					segments.push({
+						x1: layout.xSwitch - 16,
+						y1: layout.yTop,
+						x2: bladeRightX,
+						y2: bladeRightY,
+						v1: bladeLeftV,
+						v2: bladeRightV,
+						role: "switch-blade"
+					});
+					// Top bus right fixed contact wire: xSwitch+16 -> gradientEndX.
+					// Keep this segment even when open so the right-side node stays anchored at the contact.
+					if (rightContactX < gradientEndX - 1e-6) {
+						segments.push({ x1: rightContactX, y1: layout.yTop, x2: gradientEndX, y2: layout.yTop, v1: rightContactV, v2: networkTopV });
+					}
+					// Split bus flat: gradientEndX -> xRight (when branches extend leftward inside the circuit)
+					// If the top boundary is parallel, that segment is already represented by
+					// stage split-bus segments; avoid adding an overlapping duplicate segment.
+					if (!hasTopBoundaryParallelStage && gradientEndX < layout.xRight - 1e-6) {
+						segments.push({ x1: gradientEndX, y1: layout.yTop, x2: layout.xRight, y2: layout.yTop, v1: networkTopV, v2: networkTopV });
+					}
+					// Split bus extension: xRight -> topBusRightX (flat, when branches extend rightward beyond xRight)
+					if (!hasTopBoundaryParallelStage && layout.xRight < layout.topBusRightX - 1e-6) {
+						segments.push({ x1: layout.xRight, y1: layout.yTop, x2: layout.topBusRightX, y2: layout.yTop, v1: networkTopV, v2: networkTopV });
+					}
 				}
 
 				let leftRunY = layout.yTop;
@@ -4309,144 +6192,6 @@ export class CircuitApp {
 
 
 
-			function buildTableDrivenGraphSegments(layout) {
-				const nodePairRows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
-				if (nodePairRows.length === 0) return null;
-				const routeGraph = buildCircuitRouteGraph(layout);
-				if (!routeGraph || !routeGraph.nodeByKey) return null;
-
-				const potentialByKey = new Map();
-				const cache = (state && state.wireLabelNodePotentialByKey && typeof state.wireLabelNodePotentialByKey === "object")
-					? state.wireLabelNodePotentialByKey
-					: null;
-				if (cache) {
-					for (const [k, v] of Object.entries(cache)) {
-						if (!k || !Number.isFinite(v)) continue;
-						potentialByKey.set(String(k), v);
-					}
-				}
-				if (potentialByKey.size === 0) return null;
-
-				const roleForRow = (row) => {
-					if (!row) return "wire";
-					if (row.kind === "component") return "component-main";
-					if (row.kind === "shoulder") return "shoulder-wire";
-					return "wire";
-				};
-
-				const out = [];
-				for (const row of nodePairRows) {
-					if (!row || !row.fromKey || !row.toKey) continue;
-					const fromKey = String(row.fromKey);
-					const toKey = String(row.toKey);
-					const fromNode = routeGraph.nodeByKey.get(fromKey);
-					const toNode = routeGraph.nodeByKey.get(toKey);
-					if (!fromNode || !toNode) continue;
-
-					let v1 = potentialByKey.get(fromKey);
-					let v2 = potentialByKey.get(toKey);
-					const dV = Number.isFinite(row.pdPlusEmf) ? row.pdPlusEmf : NaN;
-					if (Number.isFinite(v1) && !Number.isFinite(v2) && Number.isFinite(dV)) v2 = v1 + dV;
-					if (!Number.isFinite(v1) && Number.isFinite(v2) && Number.isFinite(dV)) v1 = v2 - dV;
-					if (!Number.isFinite(v1) || !Number.isFinite(v2)) continue;
-
-					out.push({
-						x1: fromNode.x,
-						y1: fromNode.y,
-						x2: toNode.x,
-						y2: toNode.y,
-						v1,
-						v2,
-						role: roleForRow(row),
-						componentId: row.componentId || null
-					});
-				}
-				const compBodyByCompId = new Map();
-				for (const seg of out) {
-					if (seg.role === "component-main" && seg.componentId && !isExtraCell(seg.componentId) && !isBranchSwitch(seg.componentId)) {
-						compBodyByCompId.set(seg.componentId, { minY: Math.min(seg.y1, seg.y2), maxY: Math.max(seg.y1, seg.y2) });
-					}
-				}
-				for (const seg of out) {
-					if (!seg.componentId || isExtraCell(seg.componentId) || isBranchSwitch(seg.componentId)) continue;
-					const hw = componentGraphHalfWidthById(seg.componentId);
-					if (seg.role === "component-main") {
-						seg.pathHalfWidth = hw;
-						seg.forceStartVertical = true;
-						seg.forceEndVertical = true;
-					} else if (seg.role === "shoulder-wire") {
-						const body = compBodyByCompId.get(seg.componentId);
-						if (body) {
-							const s1NearBody = Math.abs(seg.y1 - body.minY) < 1 || Math.abs(seg.y1 - body.maxY) < 1;
-							const s2NearBody = Math.abs(seg.y2 - body.minY) < 1 || Math.abs(seg.y2 - body.maxY) < 1;
-							if (s1NearBody && !s2NearBody) { seg.pathHalfWidthStart = hw; seg.pathHalfWidthEnd = GRAPH_PATH_HALF_WIDTH; }
-							else if (s2NearBody && !s1NearBody) { seg.pathHalfWidthStart = GRAPH_PATH_HALF_WIDTH; seg.pathHalfWidthEnd = hw; }
-						}
-					}
-				}
-				return out.length ? out : null;
-			}
-
-			function collectPotentialGraphSegments(layout) {
-				const rawCircuitSegs = buildCircuitVoltageSegments(layout);
-				const tableSegs = buildTableDrivenGraphSegments(layout);
-				const segs = tableSegs ? tableSegs.slice() : rawCircuitSegs.slice();
-				if (!tableSegs) return segs;
-				const hasSegment = (candidate) => segs.some((s) =>
-					Math.abs(s.x1 - candidate.x1) < 1e-6
-					&& Math.abs(s.y1 - candidate.y1) < 1e-6
-					&& Math.abs(s.x2 - candidate.x2) < 1e-6
-					&& Math.abs(s.y2 - candidate.y2) < 1e-6
-					&& Math.abs(s.v1 - candidate.v1) < 1e-6
-					&& Math.abs(s.v2 - candidate.v2) < 1e-6
-					&& (s.role || "") === (candidate.role || "")
-				);
-				for (const seg of rawCircuitSegs) {
-					if (!seg) continue;
-					if (seg.role === "switch-blade") {
-						const isOpenSwitch = (seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
-							|| (seg.componentId && isOpenBranchSwitch(seg.componentId));
-						if (!isOpenSwitch) continue;
-					} else if (seg.role === "switch-open-node-wire") {
-						const isOpenMainSwitch = seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID);
-						if (!isOpenMainSwitch) continue;
-					} else {
-						continue;
-					}
-					if (!hasSegment(seg)) segs.push(seg);
-				}
-				return segs;
-			}
-
-			function updateGraphColorScale(layout) {
-				if (!layout) {
-					state.graphColorScale = { displayMin: 0, displayMax: 1, maxAbs: 1 };
-					return;
-				}
-				const segs = collectPotentialGraphSegments(layout);
-				let displayMin = Infinity;
-				let displayMax = -Infinity;
-				for (const s of segs) {
-					if (!s) continue;
-					const dv1 = graphDisplayVoltage(s.v1);
-					const dv2 = graphDisplayVoltage(s.v2);
-					if (Number.isFinite(dv1)) {
-						displayMin = Math.min(displayMin, dv1);
-						displayMax = Math.max(displayMax, dv1);
-					}
-					if (Number.isFinite(dv2)) {
-						displayMin = Math.min(displayMin, dv2);
-						displayMax = Math.max(displayMax, dv2);
-					}
-				}
-				if (!Number.isFinite(displayMin) || !Number.isFinite(displayMax)) {
-					displayMin = 0;
-					displayMax = 1;
-				}
-				const maxAbs = Math.max(1e-6, Math.abs(displayMin), Math.abs(displayMax), 0);
-				state.graphColorScale = { displayMin, displayMax, maxAbs };
-			}
-
 			function drawPotentialGraph(layout) {
 				state.graphTrackGeometry = null;
 				const useVoltageColours = !!state.voltageColorMode;
@@ -4454,24 +6199,107 @@ export class CircuitApp {
 				const panelY = 0;
 				const panelW = layout.w;
 				const panelH = layout.h;
-				const segs = collectPotentialGraphSegments(layout);
+				const buildTableDrivenGraphSegments = () => {
+					const nodePairRows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
+					if (nodePairRows.length === 0) return null;
+					const routeGraph = buildCircuitRouteGraph(layout);
+					if (!routeGraph || !routeGraph.nodeByKey) return null;
+
+					const potentialByKey = new Map();
+					const cache = (state && state.wireLabelNodePotentialByKey && typeof state.wireLabelNodePotentialByKey === "object")
+						? state.wireLabelNodePotentialByKey
+						: null;
+					if (cache) {
+						for (const [k, v] of Object.entries(cache)) {
+							if (!k || !Number.isFinite(v)) continue;
+							potentialByKey.set(String(k), v);
+						}
+					}
+					if (potentialByKey.size === 0) return null;
+
+					const roleForRow = (row) => {
+						if (!row) return "wire";
+						if (row.kind === "component") return "component-main";
+						if (row.kind === "shoulder") return "shoulder-wire";
+						return "wire";
+					};
+
+					const out = [];
+					for (const row of nodePairRows) {
+						if (!row || !row.fromKey || !row.toKey) continue;
+						const fromKey = String(row.fromKey);
+						const toKey = String(row.toKey);
+						const fromNode = routeGraph.nodeByKey.get(fromKey);
+						const toNode = routeGraph.nodeByKey.get(toKey);
+						if (!fromNode || !toNode) continue;
+
+						let v1 = potentialByKey.get(fromKey);
+						let v2 = potentialByKey.get(toKey);
+						const dV = Number.isFinite(row.pdPlusEmf) ? row.pdPlusEmf : NaN;
+						if (Number.isFinite(v1) && !Number.isFinite(v2) && Number.isFinite(dV)) v2 = v1 + dV;
+						if (!Number.isFinite(v1) && Number.isFinite(v2) && Number.isFinite(dV)) v1 = v2 - dV;
+						if (!Number.isFinite(v1) || !Number.isFinite(v2)) continue;
+
+						out.push({
+							x1: fromNode.x,
+							y1: fromNode.y,
+							x2: toNode.x,
+							y2: toNode.y,
+							v1,
+							v2,
+							role: roleForRow(row),
+							componentId: row.componentId || null
+						});
+					}
+					// Attach width fields for resistor components
+					const compBodyByCompId = new Map();
+					for (const seg of out) {
+						if (seg.role === "component-main" && seg.componentId && !isExtraCell(seg.componentId) && !isBranchSwitch(seg.componentId)) {
+							compBodyByCompId.set(seg.componentId, { minY: Math.min(seg.y1, seg.y2), maxY: Math.max(seg.y1, seg.y2) });
+						}
+					}
+					for (const seg of out) {
+						if (!seg.componentId || isExtraCell(seg.componentId) || isBranchSwitch(seg.componentId)) continue;
+						const hw = componentGraphHalfWidthById(seg.componentId);
+						if (seg.role === "component-main") {
+							seg.pathHalfWidth = hw;
+							seg.forceStartVertical = true;
+							seg.forceEndVertical = true;
+						} else if (seg.role === "shoulder-wire") {
+							const body = compBodyByCompId.get(seg.componentId);
+							if (body) {
+								const s1NearBody = Math.abs(seg.y1 - body.minY) < 1 || Math.abs(seg.y1 - body.maxY) < 1;
+								const s2NearBody = Math.abs(seg.y2 - body.minY) < 1 || Math.abs(seg.y2 - body.maxY) < 1;
+								if (s1NearBody && !s2NearBody) { seg.pathHalfWidthStart = hw; seg.pathHalfWidthEnd = GRAPH_PATH_HALF_WIDTH; }
+								else if (s2NearBody && !s1NearBody) { seg.pathHalfWidthStart = GRAPH_PATH_HALF_WIDTH; seg.pathHalfWidthEnd = hw; }
+							}
+						}
+					}
+					return out.length ? out : null;
+				};
+
+				const rawCircuitSegs = buildCircuitVoltageSegments(layout);
+				const tableSegs = buildTableDrivenGraphSegments();
+				const segs = tableSegs ? tableSegs.slice() : rawCircuitSegs;
+				if (tableSegs) {
+					const hasSegment = (candidate) => segs.some((s) =>
+						Math.abs(s.x1 - candidate.x1) < 1e-6
+						&& Math.abs(s.y1 - candidate.y1) < 1e-6
+						&& Math.abs(s.x2 - candidate.x2) < 1e-6
+						&& Math.abs(s.y2 - candidate.y2) < 1e-6
+						&& Math.abs(s.v1 - candidate.v1) < 1e-6
+						&& Math.abs(s.v2 - candidate.v2) < 1e-6
+						&& (s.role || "") === (candidate.role || "")
+					);
+					for (const seg of rawCircuitSegs) {
+						if (!seg || seg.role !== "switch-blade") continue;
+						if (!seg.componentId || isComponentSwitchClosed(seg.componentId)) continue;
+						if (!hasSegment(seg)) segs.push(seg);
+					}
+				}
 				if (!segs.length) return;
 				const useStepwiseShortRouteSurface = false;
-
-				// Pre-compute raw max so the inverted axis can use it for graphV.
-				let rawVMax = -Infinity;
-				for (const s of segs) {
-					if (Number.isFinite(s.v1) && s.v1 > rawVMax) rawVMax = s.v1;
-					if (Number.isFinite(s.v2) && s.v2 > rawVMax) rawVMax = s.v2;
-				}
-				if (!Number.isFinite(rawVMax)) rawVMax = 0;
-
-				// graphV maps solver-normalised (min=0) potentials to graph heights.
-				// Non-inverted: 0 is floor, higher potentials go up.
-				// Inverted: highest potential is floor, 0 (min) is at the top.
-				const graphV = state.invertVoltageAxis
-					? (v) => rawVMax - v
-					: (v) => v;
+				const graphV = graphDisplayVoltage;
 
 				let vMin = Infinity;
 				let vMax = -Infinity;
@@ -4508,41 +6336,35 @@ export class CircuitApp {
 					const ux = (x - xRef) * xyScale;
 					const uy = (y - yRef) * xyScale;
 					const uz = (v - vMid) * zScale;
-				// Apply roll (true 3D y-axis rotation) to 3D coordinates
-				const ux_r = ux * cRoll + uz * sRoll;
-				const uz_r = -ux * sRoll + uz * cRoll;
-				const uy_r = uy;
-				// Apply azimuth (z-axis rotation)
-				const xr = ux_r * cAz - uy_r * sAz;
-				const yr = ux_r * sAz + uy_r * cAz;
-				// Apply elevation projection
-				const sx = xr + uz_r * 0.34 * cEl;
-				const sy = yr * 0.66 - uz_r * sEl;
-				const graphCenter = getGraphCenter(layout);
-				return {
-					x: graphCenter.x + sx,
-					y: graphCenter.y + sy
-				};
-			}
+					const xr = ux * cAz - uy * sAz;
+					const yr = ux * sAz + uy * cAz;
+					const sx0 = xr + uz * 0.34 * cEl;
+					const sy0 = yr * 0.66 - uz * sEl;
+					const sx = sx0 * cRoll - sy0 * sRoll;
+					const sy = sx0 * sRoll + sy0 * cRoll;
+					return {
+						x: (layout.circuitRight + layout.w) * 0.5 + state.graphPanX + sx,
+						y: layout.midY + state.graphPanY + sy
+					};
+				}
 
-			ctx.save();
-			const azDeg = (state.graphAzimuth * 180 / Math.PI);
-			const elDeg = (state.graphElevation * 180 / Math.PI);
-			const rollDeg = (state.graphRoll * 180 / Math.PI);
-			const readoutX = layout.w - 14;
-			const readoutY = layout.h - 14;
-			const readoutStep = 14;
-			ctx.fillStyle = "rgba(51, 66, 85, 0.95)";
-			ctx.font = "600 11px system-ui, sans-serif";
-			ctx.textAlign = "right";
-			ctx.textBaseline = "alphabetic";
-			ctx.fillText("Zoom " + state.graphZoom.toFixed(2) + "x", readoutX, readoutY - readoutStep * 0);
-			ctx.fillText("Roll " + state.graphRoll.toFixed(3) + " rad (" + rollDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 1);
-			ctx.fillText("El " + state.graphElevation.toFixed(3) + " rad (" + elDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 2);
-			ctx.fillText("Az " + state.graphAzimuth.toFixed(3) + " rad (" + azDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 3);
-			const referenceLabel = state.invertVoltageAxis ? "max node potential" : "min node potential";
-			ctx.fillText("Reference: " + referenceLabel + " = 0 V", readoutX, readoutY - readoutStep * 4);
-			ctx.fillText("Controls: Left-drag pan, Right-drag potential-axis rotate, Shift+Left-drag x/y rotate, Wheel zoom", readoutX, readoutY - readoutStep * 5);
+				ctx.save();
+				const azDeg = (state.graphAzimuth * 180 / Math.PI);
+				const elDeg = (state.graphElevation * 180 / Math.PI);
+				const rollDeg = (state.graphRoll * 180 / Math.PI);
+				const readoutX = layout.w - 14;
+				const readoutY = layout.h - 14;
+				const readoutStep = 14;
+				ctx.fillStyle = "rgba(51, 66, 85, 0.95)";
+				ctx.font = "600 11px system-ui, sans-serif";
+				ctx.textAlign = "right";
+				ctx.textBaseline = "alphabetic";
+				ctx.fillText("Zoom " + state.graphZoom.toFixed(2) + "x", readoutX, readoutY - readoutStep * 0);
+				ctx.fillText("Roll " + state.graphRoll.toFixed(3) + " rad (" + rollDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 1);
+				ctx.fillText("El " + state.graphElevation.toFixed(3) + " rad (" + elDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 2);
+				ctx.fillText("Az " + state.graphAzimuth.toFixed(3) + " rad (" + azDeg.toFixed(1) + " deg)", readoutX, readoutY - readoutStep * 3);
+				const referenceLabel = state.invertVoltageAxis ? "+ terminal" : "- terminal";
+				ctx.fillText("Reference: " + referenceLabel + " = 0 V", readoutX, readoutY - readoutStep * 4);
 
 				function endpointKey(x, y, v) {
 					return x.toFixed(3) + "|" + y.toFixed(3) + "|" + v.toFixed(3);
@@ -4977,7 +6799,7 @@ export class CircuitApp {
 					});
 				}
 
-				// ── Unified depth-sorted wall pass ──────────────────────────────────────────
+				// â”€â”€ Unified depth-sorted wall pass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 				// All wall face quads (segment sides + joint caps) are collected here,
 				// sorted back-to-front by average screen-Y of their base corners.
 				// Edge lines are separate depth-sorted entries at faceDepth+0.5 so they
@@ -5115,7 +6937,7 @@ export class CircuitApp {
 					}
 				}
 
-				// ── Draw all wall faces and edges: single depth-sorted pass ───────────────
+				// â”€â”€ Draw all wall faces and edges: single depth-sorted pass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 				allWallFaces.sort((a, b) => a.depth - b.depth);
 				for (const face of allWallFaces) {
 					ctx.globalAlpha = face.alpha;
@@ -5358,12 +7180,12 @@ export class CircuitApp {
 
 			class CircuitSceneRenderer {
 				voltageToColor(v) {
+					const rawMin = Number.isFinite(state.solved.vMin) ? state.solved.vMin : 0;
+					const rawMax = Number.isFinite(state.solved.vMax) ? state.solved.vMax : 1;
 					const displayV = graphDisplayVoltage(v);
-					const scale = state.graphColorScale || { displayMin: 0, displayMax: 1, maxAbs: 1 };
-					const maxAbs = Math.max(1e-6,
-						Number.isFinite(scale.maxAbs) ? scale.maxAbs : 1,
-						Math.abs(Number.isFinite(scale.displayMin) ? scale.displayMin : 0),
-						Math.abs(Number.isFinite(scale.displayMax) ? scale.displayMax : 1));
+					const minV = Math.min(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
+					const maxV = Math.max(graphDisplayVoltage(rawMin), graphDisplayVoltage(rawMax), 0);
+					const maxAbs = Math.max(1e-6, Math.abs(minV), Math.abs(maxV));
 					const signed = clamp(displayV / maxAbs, -1, 1);
 					const hue = 60 + 60 * signed;
 					return `hsl(${hue}, 85%, 42%)`;
@@ -5446,7 +7268,7 @@ export class CircuitApp {
 					const midY = wireBottom - 18;
 					const SH = 5.33;
 					const arrowX = x + 12;
-					// Convention: effectiveI > 0 ? arrow DOWN; effectiveI < 0 ? arrow UP.
+					// Convention: effectiveI > 0 → arrow DOWN; effectiveI < 0 → arrow UP.
 					// Caller pre-multiplies sol.I by sol.arrowAlignFactor before calling here.
 					const arrowDir = I < 0 ? -1 : 1;
 					const tipY = midY + arrowDir * SH;
@@ -5682,7 +7504,7 @@ export class CircuitApp {
 						if (!activeDrag && sol) {
 							ctx.font = "600 10.5px system-ui, sans-serif";
 							ctx.fillStyle = "#334";
-							ctx.fillText(Math.abs(sol.V).toFixed(2) + " V", -14, 8);
+							ctx.fillText(sol.V.toFixed(2) + " V", -14, 8);
 						}
 					} else {
 						ctx.fillStyle = activeDrag ? "rgba(255, 255, 255, 0.88)" : "#ffffff";
@@ -5715,7 +7537,7 @@ export class CircuitApp {
 							ctx.font = "600 10.5px system-ui, sans-serif";
 							ctx.fillStyle = "#334";
 							if (sol) {
-								ctx.fillText(Math.abs(sol.V).toFixed(2) + " V", 0, +10);
+								ctx.fillText(sol.V.toFixed(2) + " V", 0, +10);
 							}
 						}
 					}
@@ -5801,11 +7623,10 @@ export class CircuitApp {
 					ctx.save();
 					ctx.lineWidth = 4;
 					ctx.lineCap = "round";
-					const mainSwitchClosed = isComponentSwitchClosed(MAIN_SWITCH_ID);
-					const bladeEndY = mainSwitchClosed ? y : (y - 14);
+					const bladeEndY = state.switchClosed ? y : (y - 14);
 					const bladeStartX = x - 16;
-					const bladeEndX = mainSwitchClosed ? (x + 16) : (x + 14);
-					const bladeEndV = mainSwitchClosed ? rightV : leftV;
+					const bladeEndX = state.switchClosed ? (x + 16) : (x + 14);
+					const bladeEndV = state.switchClosed ? rightV : leftV;
 					if (state.voltageColorMode) {
 						const bladeGrad = ctx.createLinearGradient(bladeStartX, y, bladeEndX, bladeEndY);
 						bladeGrad.addColorStop(0, this.voltageToColor(leftV));
@@ -6311,7 +8132,108 @@ export class CircuitApp {
 					if (!state.debugNodePotentials) return;
 					const registry = this.buildJunctionLabelRegistry(layout);
 					const routeGraph = buildCircuitRouteGraph(layout);
+
+					// Build node connections and calculate potentials from node connections table
+					const nodeConnectionMap = new Map();
+					const nodePairRows = applyKirchhoffSectionSolve(layout)?.nodePairRows || [];
 					const nodeKeyFor = (x, y) => `${x.toFixed(3)}|${y.toFixed(3)}`;
+					for (const row of nodePairRows) {
+						const a = row.fromKey;
+						const b = row.toKey;
+						if (a && b) {
+							if (!nodeConnectionMap.has(a)) nodeConnectionMap.set(a, new Set());
+							if (!nodeConnectionMap.has(b)) nodeConnectionMap.set(b, new Set());
+							nodeConnectionMap.get(a).add(b);
+							nodeConnectionMap.get(b).add(a);
+						}
+					}
+
+					const solveNodePotentials = () => {
+						const nodeIds = Array.from(nodeConnectionMap.keys());
+						if (nodeIds.length === 0) return new Map();
+						if (nodeIds.length === 1) {
+							const only = nodeIds[0];
+							return new Map([[only, 0]]);
+						}
+
+						const out = new Map();
+						const anchor = nodeIds[0];
+						out.set(anchor, 0);
+
+						const usableRows = nodePairRows
+							.map((row) => {
+								const d = Number.isFinite(row.pdPlusEmf) ? row.pdPlusEmf : NaN;
+								if (!row.fromKey || !row.toKey || !Number.isFinite(d)) return null;
+								return { fromKey: row.fromKey, toKey: row.toKey, d };
+							})
+							.filter(Boolean);
+
+						const maxPasses = Math.max(2, usableRows.length * 3);
+						for (let pass = 0; pass < maxPasses; pass++) {
+							let changed = false;
+							for (const step of usableRows) {
+								const hasFrom = out.has(step.fromKey);
+								const hasTo = out.has(step.toKey);
+								if (hasFrom && !hasTo) {
+									out.set(step.toKey, out.get(step.fromKey) + step.d);
+									changed = true;
+								} else if (!hasFrom && hasTo) {
+									out.set(step.fromKey, out.get(step.toKey) - step.d);
+									changed = true;
+								}
+							}
+							if (!changed) break;
+						}
+
+						const seen = new Set();
+						for (const start of nodeIds) {
+							if (seen.has(start)) continue;
+							const comp = [];
+							const stack = [start];
+							seen.add(start);
+							while (stack.length) {
+								const cur = stack.pop();
+								comp.push(cur);
+								const neighbors = nodeConnectionMap.get(cur) || [];
+								for (const n of neighbors) {
+									if (seen.has(n)) continue;
+									seen.add(n);
+									stack.push(n);
+								}
+							}
+							if (!comp.some((id) => out.has(id))) out.set(comp[0], 0);
+							const compSet = new Set(comp);
+							for (let pass = 0; pass < maxPasses; pass++) {
+								let changed = false;
+								for (const step of usableRows) {
+									if (!compSet.has(step.fromKey) || !compSet.has(step.toKey)) continue;
+									const hasFrom = out.has(step.fromKey);
+									const hasTo = out.has(step.toKey);
+									if (hasFrom && !hasTo) {
+										out.set(step.toKey, out.get(step.fromKey) + step.d);
+										changed = true;
+									} else if (!hasFrom && hasTo) {
+										out.set(step.fromKey, out.get(step.toKey) - step.d);
+										changed = true;
+									}
+								}
+								if (!changed) break;
+							}
+							for (const id of comp) {
+								if (!out.has(id)) out.set(id, 0);
+							}
+							let compMin = Infinity;
+							for (const id of comp) {
+								const value = out.get(id);
+								if (Number.isFinite(value) && value < compMin) compMin = value;
+							}
+							if (Number.isFinite(compMin) && compMin < 0) {
+								const lift = -compMin;
+								for (const id of comp) out.set(id, out.get(id) + lift);
+							}
+						}
+						return out;
+					};
 
 					const nodePotentialByKey = new Map();
 					const wireLabelPotentialCache = (state && state.wireLabelNodePotentialByKey && typeof state.wireLabelNodePotentialByKey === "object")
@@ -6320,6 +8242,11 @@ export class CircuitApp {
 					if (wireLabelPotentialCache) {
 						for (const [k, v] of Object.entries(wireLabelPotentialCache)) {
 							if (!k || !Number.isFinite(v)) continue;
+							nodePotentialByKey.set(k, v);
+						}
+					}
+					if (nodePotentialByKey.size === 0) {
+						for (const [k, v] of solveNodePotentials().entries()) {
 							nodePotentialByKey.set(k, v);
 						}
 					}
@@ -6395,8 +8322,8 @@ export class CircuitApp {
 						}
 					}
 				// Compute a label offset that avoids overlapping the wire track.
-				// Pure-horizontal node ? label above. Pure-vertical ? label right.
-				// Corner (h+v) or multi-junction ? label above-right diagonally.
+				// Pure-horizontal node → label above. Pure-vertical → label right.
+				// Corner (h+v) or multi-junction → label above-right diagonally.
 				const labelOffset = (point) => {
 					if (!routeGraph || !routeGraph.adjacency || !routeGraph.edges || !routeGraph.nodeByKey) {
 						return { dx: 8, dy: 0 };
@@ -6416,9 +8343,9 @@ export class CircuitApp {
 						const dy = Math.abs(other.y - point.y);
 						if (dx >= dy) hasH = true; else hasV = true;
 					}
-					if (hasH && !hasV) return { dx: 0, dy: -14 };   // horizontal wire ? above
-					if (!hasH && hasV) return { dx: 8, dy: 0 };      // vertical wire ? right
-					return { dx: 6, dy: -12 };                        // corner/multi ? above-right
+					if (hasH && !hasV) return { dx: 0, dy: -14 };   // horizontal wire → above
+					if (!hasH && hasV) return { dx: 8, dy: 0 };      // vertical wire → right
+					return { dx: 6, dy: -12 };                        // corner/multi → above-right
 				};
 
 				ctx.save();
@@ -6494,7 +8421,6 @@ export class CircuitApp {
 					const sectionCurrentByRouteIndex = {};
 					const sectionCurrentByPairKey = {};
 					const sectionPairGeometries = [];
-					const sectionHighCurrentPairGeometries = [];
 					const branchNetRelations = [];
 					const sectionCurrentVar = (fromLabel, toLabel) => {
 						const a = String(fromLabel || "?");
@@ -6539,7 +8465,6 @@ export class CircuitApp {
 						if (r && r.isGraphRoute && Number.isFinite(r.routeIndex)) {
 							sectionColorByRouteIndex[r.routeIndex] = rowColor;
 						}
-						let pairIsHighCurrent = false;
 						if (networkSolution && networkSolution.branchResults && networkSolution.branchResults[ri]) {
 							const brI = networkSolution.branchResults[ri].I;
 							const pairI = Number.isFinite(brI) ? (pairDirectionSign * brI) : NaN;
@@ -6549,7 +8474,6 @@ export class CircuitApp {
 								}
 								sectionCurrentByPairKey[pairKeyF] = pairI;
 								if (pairKeyR !== pairKeyF) sectionCurrentByPairKey[pairKeyR] = -pairI;
-								pairIsHighCurrent = Math.abs(pairI) > HIGH_CURRENT_WARNING_THRESHOLD_A;
 							}
 						}
 						const rowParts = Array.isArray(r.parts) ? r.parts : [];
@@ -6557,9 +8481,6 @@ export class CircuitApp {
 						const pushGeomEntry = (x1, y1, x2, y2) => {
 							if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) return;
 							sectionPairGeometries.push({ x1, y1, x2, y2, color: rowColor });
-							if (pairIsHighCurrent) {
-								sectionHighCurrentPairGeometries.push({ x1, y1, x2, y2 });
-							}
 						};
 						if (rowParts.length > 0) {
 							for (const p of rowParts) {
@@ -6706,13 +8627,10 @@ export class CircuitApp {
 						if (uniq.length === 1) return `${uniq[0]}-near`;
 						return `P${idx + 1}`;
 					};
-					const displayPointRows = displayPoints.map((point, idx) => {
-						const label = derivePointLabel(point, idx);
-						const potential = potentialByJunction.has(point.id)
-							? potentialByJunction.get(point.id)
-							: potentialSampler.potentialAt(point.x, point.y);
-						return { label, potential };
-					});
+					const displayPointRows = displayPoints.map((point, idx) => ({
+						label: derivePointLabel(point, idx),
+						potential: potentialSampler.potentialAt(point.x, point.y)
+					}));
 					const junctionBodyLines = displayPointRows.length
 						? displayPointRows.map((row) => {
 							const jTxt = String(row.label).padEnd(11, " ");
@@ -6726,7 +8644,6 @@ export class CircuitApp {
 					state.sectionCurrentByRouteIndex = sectionCurrentByRouteIndex;
 					state.sectionCurrentByPairKey = sectionCurrentByPairKey;
 					state.sectionPairGeometries = sectionPairGeometries;
-					state.sectionHighCurrentPairGeometries = sectionHighCurrentPairGeometries;
 
 					ctx.font = "600 11px Consolas, 'Courier New', monospace";
 					const pad = 8;
@@ -6779,32 +8696,30 @@ export class CircuitApp {
 
 					const boxH = pad * 2 + lineH * 2 + rowsPerCol * lineH;
 					const y = Math.max(8, canvasH - boxH - 10);
-					if (state.debugMode) {
-						ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
-						ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
-						ctx.lineWidth = 1.3;
-						ctx.beginPath();
-						ctx.roundRect(x, y, boxW, boxH, 6);
-						ctx.fill();
-						ctx.stroke();
+					ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
+					ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
+					ctx.lineWidth = 1.3;
+					ctx.beginPath();
+					ctx.roundRect(x, y, boxW, boxH, 6);
+					ctx.fill();
+					ctx.stroke();
 
-						ctx.fillStyle = "#14354f";
-						ctx.textAlign = "left";
-						ctx.textBaseline = "top";
-						ctx.fillText(header, x + pad, y + pad);
-						let colX = x + pad;
-						for (let c = 0; c < colCount; c++) {
-							ctx.fillText(colHeader, colX, y + pad + lineH);
-							const start = c * rowsPerCol;
-							const end = Math.min(start + rowsPerCol, bodyLines.length);
-							for (let i = start; i < end; i++) {
-								const localRow = i - start;
-								ctx.fillStyle = sectionRowColors[i] || "#14354f";
-								ctx.fillText(bodyLines[i], colX, y + pad + lineH * (2 + localRow));
-							}
-							ctx.fillStyle = "#14354f";
-							colX += colWidths[c] + colGap;
+					ctx.fillStyle = "#14354f";
+					ctx.textAlign = "left";
+					ctx.textBaseline = "top";
+					ctx.fillText(header, x + pad, y + pad);
+					let colX = x + pad;
+					for (let c = 0; c < colCount; c++) {
+						ctx.fillText(colHeader, colX, y + pad + lineH);
+						const start = c * rowsPerCol;
+						const end = Math.min(start + rowsPerCol, bodyLines.length);
+						for (let i = start; i < end; i++) {
+							const localRow = i - start;
+							ctx.fillStyle = sectionRowColors[i] || "#14354f";
+							ctx.fillText(bodyLines[i], colX, y + pad + lineH * (2 + localRow));
 						}
+						ctx.fillStyle = "#14354f";
+						colX += colWidths[c] + colGap;
 					}
 
 					const junctionX = canFitSideBySide
@@ -6814,21 +8729,19 @@ export class CircuitApp {
 						? Math.max(8, canvasH - junctionBoxH - 10)
 						: Math.max(8, y - junctionBoxH - 8);
 
-					if (state.debugMode) {
-						ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
-						ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
-						ctx.lineWidth = 1.3;
-						ctx.beginPath();
-						ctx.roundRect(junctionX, junctionY, junctionBoxW, junctionBoxH, 6);
-						ctx.fill();
-						ctx.stroke();
+					ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
+					ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
+					ctx.lineWidth = 1.3;
+					ctx.beginPath();
+					ctx.roundRect(junctionX, junctionY, junctionBoxW, junctionBoxH, 6);
+					ctx.fill();
+					ctx.stroke();
+					ctx.fillStyle = "#14354f";
+					ctx.fillText(junctionHeader, junctionX + junctionPad, junctionY + junctionPad);
+					ctx.fillText(junctionColHeader, junctionX + junctionPad, junctionY + junctionPad + lineH);
+					for (let i = 0; i < junctionRowsVisible; i++) {
 						ctx.fillStyle = "#14354f";
-						ctx.fillText(junctionHeader, junctionX + junctionPad, junctionY + junctionPad);
-						ctx.fillText(junctionColHeader, junctionX + junctionPad, junctionY + junctionPad + lineH);
-						for (let i = 0; i < junctionRowsVisible; i++) {
-							ctx.fillStyle = "#14354f";
-							ctx.fillText(junctionBodyLines[i] || "", junctionX + junctionPad, junctionY + junctionPad + lineH * (2 + i));
-						}
+						ctx.fillText(junctionBodyLines[i] || "", junctionX + junctionPad, junctionY + junctionPad + lineH * (2 + i));
 					}
 
 					const sectionRTotal = sectionRows.reduce((sum, row) => {
@@ -6858,24 +8771,22 @@ export class CircuitApp {
 					const resistanceBoxW = resistanceTextW + resistancePad * 2;
 					const resistanceRowsVisible = Math.max(1, resistanceCheckBody.length);
 					const resistanceBoxH = resistancePad * 2 + lineH * (2 + resistanceRowsVisible);
-					if (state.debugMode) {
-						const resistanceX = junctionX;
-						const resistanceY = canFitSideBySide
-							? Math.max(8, junctionY - resistanceBoxH - 8)
-							: Math.min(canvasH - resistanceBoxH - 8, junctionY + junctionBoxH + 8);
-						ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
-						ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
-						ctx.lineWidth = 1.3;
-						ctx.beginPath();
-						ctx.roundRect(resistanceX, resistanceY, resistanceBoxW, resistanceBoxH, 6);
-						ctx.fill();
-						ctx.stroke();
-						ctx.fillStyle = "#14354f";
-						ctx.fillText(resistanceCheckHeader, resistanceX + resistancePad, resistanceY + resistancePad);
-						ctx.fillText(resistanceCheckColHeader, resistanceX + resistancePad, resistanceY + resistancePad + lineH);
-						for (let i = 0; i < resistanceRowsVisible; i++) {
-							ctx.fillText(resistanceCheckBody[i] || "", resistanceX + resistancePad, resistanceY + resistancePad + lineH * (2 + i));
-						}
+					const resistanceX = junctionX;
+					const resistanceY = canFitSideBySide
+						? Math.max(8, junctionY - resistanceBoxH - 8)
+						: Math.min(canvasH - resistanceBoxH - 8, junctionY + junctionBoxH + 8);
+					ctx.fillStyle = "rgba(245, 251, 255, 0.92)";
+					ctx.strokeStyle = "rgba(22, 76, 112, 0.82)";
+					ctx.lineWidth = 1.3;
+					ctx.beginPath();
+					ctx.roundRect(resistanceX, resistanceY, resistanceBoxW, resistanceBoxH, 6);
+					ctx.fill();
+					ctx.stroke();
+					ctx.fillStyle = "#14354f";
+					ctx.fillText(resistanceCheckHeader, resistanceX + resistancePad, resistanceY + resistancePad);
+					ctx.fillText(resistanceCheckColHeader, resistanceX + resistancePad, resistanceY + resistancePad + lineH);
+					for (let i = 0; i < resistanceRowsVisible; i++) {
+						ctx.fillText(resistanceCheckBody[i] || "", resistanceX + resistancePad, resistanceY + resistancePad + lineH * (2 + i));
 					}
 
 					state.wireLabelNodePotentialByKey = null;
@@ -6884,8 +8795,7 @@ export class CircuitApp {
 						? state.wireLabelValueBySegmentIndex
 						: {};
 					const hasWireLabelCache = Object.keys(wireLabelCache).length > 0;
-					const shouldBuildNodePotentialCache = hasWireLabelCache || wireResistanceLabelsEnabled() || state.potentialGraphMode || state.voltageColorMode;
-					if (shouldBuildNodePotentialCache) {
+					if (hasWireLabelCache || wireResistanceLabelsEnabled()) {
 					const wireLabelSegments = routeGraph && Array.isArray(routeGraph.segments)
 						? routeGraph.segments
 						: buildCircuitVoltageSegments(layout);
@@ -7000,11 +8910,7 @@ export class CircuitApp {
 							&& piece.componentSection === "cell-emf");
 						let fromKey = null;
 						let toKey = null;
-						if (isCellEmfPiece) {
-							const canonicalOrder = canonicalNodeOrderForPiece(piece, aKey, bKey);
-							fromKey = canonicalOrder.fromKey;
-							toKey = canonicalOrder.toKey;
-						} else if (Number.isFinite(wireI) || isInfiniteCurrentValue(wireI)) {
+						if (Number.isFinite(wireI) || isInfiniteCurrentValue(wireI)) {
 							if (wireI >= 0) {
 								fromKey = aKey;
 								toKey = bKey;
@@ -7017,20 +8923,10 @@ export class CircuitApp {
 							fromKey = canonicalOrder.fromKey;
 							toKey = canonicalOrder.toKey;
 						}
-						const cellTraversalSign = (fromKey === aKey && toKey === bKey) ? 1 : -1;
-						const cellGeometrySignAtoB = Math.abs(piece.y2 - piece.y1) >= Math.abs(piece.x2 - piece.x1)
-							? (piece.y2 >= piece.y1 ? 1 : -1)
-							: (piece.x2 >= piece.x1 ? 1 : -1);
-						const cellRiseSignAtoB = isCellEmfPiece
-							? (getCellPolarity(piece.componentId) * cellGeometrySignAtoB)
-							: NaN;
-						const directedCellEmf = isCellEmfPiece && Number.isFinite(sectionEmf)
-							? (Math.abs(sectionEmf) * cellTraversalSign * cellRiseSignAtoB)
-							: NaN;
 						const directedPdPlusEmf = (cached && Number.isFinite(cached.directedPdDisplay) && !isCellEmfPiece)
 							? cached.directedPdDisplay
 							: (isCellEmfPiece
-								? directedCellEmf
+								? directedVoltageForPiece(fromKey, toKey, aKey, bKey, signedDelta)
 								: (Number.isFinite(wireI)
 									? (-Math.abs(wireI) * sectionR)
 									: directedVoltageForPiece(fromKey, toKey, aKey, bKey, signedDelta)));
@@ -7175,55 +9071,28 @@ export class CircuitApp {
 							for (const id of comp) {
 								if (!out.has(id)) out.set(id, 0);
 							}
+							let compMin = Infinity;
+							for (const id of comp) {
+								const value = out.get(id);
+								if (Number.isFinite(value) && value < compMin) compMin = value;
+							}
+							if (Number.isFinite(compMin) && compMin < 0) {
+								const lift = -compMin;
+								for (const id of comp) out.set(id, out.get(id) + lift);
+							}
 						}
 						return out;
 					};
 
 					const nodePotentialById = solveNodePotentials();
-					const nodeIds = Array.from(nodeConnectionMap.keys()).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
-					const anchorNodeId = nodeIds.includes("N1") ? "N1" : (nodeIds[0] || null);
-					const anchorConnected = new Set();
-					if (anchorNodeId) {
-						const stack = [anchorNodeId];
-						anchorConnected.add(anchorNodeId);
-						while (stack.length) {
-							const cur = stack.pop();
-							const neighbors = nodeConnectionMap.get(cur) || [];
-							for (const n of neighbors) {
-								if (anchorConnected.has(n)) continue;
-								anchorConnected.add(n);
-								stack.push(n);
-							}
-						}
-					}
 					const nodePotentialByKey = {};
 					for (const node of nodesOrdered) {
 						if (!node || !node.key) continue;
 						const nodeId = nodeIdByKey.get(node.key);
 						if (!nodeId) continue;
-						let potential = nodePotentialById.get(nodeId);
-						const isDisconnectedFromAnchor = anchorNodeId && !anchorConnected.has(nodeId);
-						const sampledPotential = isDisconnectedFromAnchor
-							&& potentialSampler
-							&& typeof potentialSampler.potentialAt === "function"
-							? potentialSampler.potentialAt(node.x, node.y)
-							: null;
-						if (isDisconnectedFromAnchor && Number.isFinite(sampledPotential)) {
-							potential = sampledPotential;
-							nodePotentialById.set(nodeId, potential);
-						}
+						const potential = nodePotentialById.get(nodeId);
 						if (!Number.isFinite(potential)) continue;
 						nodePotentialByKey[node.key] = potential;
-					}
-					const finiteNodePotentials = Array.from(nodePotentialById.values()).filter((v) => Number.isFinite(v));
-					const displayShift = finiteNodePotentials.length ? Math.min(...finiteNodePotentials) : 0;
-					if (Number.isFinite(displayShift) && Math.abs(displayShift) > 1e-12) {
-						for (const [nodeId, value] of nodePotentialById.entries()) {
-							if (Number.isFinite(value)) nodePotentialById.set(nodeId, value - displayShift);
-						}
-						for (const [key, value] of Object.entries(nodePotentialByKey)) {
-							if (Number.isFinite(value)) nodePotentialByKey[key] = value - displayShift;
-						}
 					}
 					state.wireLabelNodePotentialByKey = nodePotentialByKey;
 					const nodeConnectionHeader = `Node connections: ${nodeConnectionMap.size}`;
@@ -7307,26 +9176,14 @@ export class CircuitApp {
 					ctx.restore();
 				}
 
+				drawShortCircuitRouteOverlay(_layout) {}
+
 				drawPotentialGraph(layout) {
 					return drawPotentialGraph(layout);
 				}
 			}
 
 			const sceneRenderer = new CircuitSceneRenderer();
-
-			// Initialize Kirchhoff solver with all required dependencies
-			const kirchhoffSolverInstance = createKirchhoffSolver({
-				state,
-				buildCircuitRouteGraph,
-				buildCircuitVoltageSegments,
-				isBranchSwitch,
-				isComponentSwitchClosed,
-				componentIntrinsicResistance,
-				componentResistance,
-				componentEmf,
-				SHORT_WIRE_R_PER_PIXEL,
-				GRAPH_PATH_HALF_WIDTH
-			});
 
 			function applyViewTransformImpl() {
 				const dpr = window.devicePixelRatio || 1;
@@ -7353,14 +9210,14 @@ export class CircuitApp {
 				const rect = canvasWrap.getBoundingClientRect();
 				const pixelWidth = Math.max(1, Math.floor(rect.width * dpr));
 				const pixelHeight = Math.max(1, Math.floor(rect.height * dpr));
-				const cssWidth = pixelWidth / dpr + "px";
-				const cssHeight = pixelHeight / dpr + "px";
+				const cssWidth = rect.width + "px";
+				const cssHeight = rect.height + "px";
 
-				// Only treat true pixel-size changes as resizes.
-				// Minor sub-pixel jitter from getBoundingClientRect() should not re-auto-fit the graph.
 				if (!boundsChanged
 					&& canvas.width === pixelWidth
-					&& canvas.height === pixelHeight) {
+					&& canvas.height === pixelHeight
+					&& canvas.style.width === cssWidth
+					&& canvas.style.height === cssHeight) {
 					return;
 				}
 
@@ -7382,7 +9239,6 @@ export class CircuitApp {
 					rebuildLayout();
 				}
 				const layout = state.layout;
-				updateGraphColorScale(layout);
 				wireLabelCounter2D = 0;
 				wireResistanceLabelQueue.length = 0;
 				sliderHitAreas.length = 0;
@@ -7397,48 +9253,11 @@ export class CircuitApp {
 				sceneRenderer.drawBottomWire(layout);
 				sceneRenderer.drawBottomWireCurrentArrow(layout);
 				sceneRenderer.drawNetwork(layout);
-				// High-current glow overlay
-				if (state.solved && isHighCurrentWarning(state.solved)) {
-					const hotSegs = Array.isArray(state.sectionHighCurrentPairGeometries)
-						? state.sectionHighCurrentPairGeometries
-						: [];
-
-					if (hotSegs.length > 0) {
-						ctx.save();
-						ctx.globalCompositeOperation = "source-over";
-						const glowPasses = [
-							{ blur: 16, alpha: 0.18, width: 13 },
-							{ blur: 8,  alpha: 0.32, width: 7  },
-							{ blur: 3,  alpha: 0.55, width: 4  }
-						];
-						for (const pass of glowPasses) {
-							ctx.shadowColor = "rgba(255, 80, 0, 1)";
-							ctx.shadowBlur = pass.blur;
-							ctx.strokeStyle = `rgba(255, 120, 20, ${pass.alpha})`;
-							ctx.lineWidth = pass.width;
-							ctx.lineCap = "round";
-							ctx.lineJoin = "round";
-							for (const seg of hotSegs) {
-								ctx.beginPath();
-								ctx.moveTo(seg.x1, seg.y1);
-								ctx.lineTo(seg.x2, seg.y2);
-								ctx.stroke();
-							}
-						}
-						ctx.shadowBlur = 0;
-						ctx.restore();
-					}
-					// Position and show the DOM warning bar below the topbar
-					const topbarRect = topbar.getBoundingClientRect();
-					highCurrentWarning.style.top = (topbarRect.bottom + 6) + "px";
-					highCurrentWarning.classList.add("visible");
-				} else {
-					highCurrentWarning.classList.remove("visible");
-				}
 				sceneRenderer.drawJunctionIds(layout);
 				sceneRenderer.drawNodePotentials(layout);
 				drawQueuedWireResistanceLabels(layout);
 				sceneRenderer.drawJunctionDebugTable(layout);
+				sceneRenderer.drawShortCircuitRouteOverlay(layout);
 				if (state.potentialGraphMode) {
 					sceneRenderer.drawPotentialGraph(layout);
 				}
@@ -7575,12 +9394,14 @@ export class CircuitApp {
 				isOverGraphPanelAtLogical(logX, logY) {
 					if (!state.layout || !state.potentialGraphMode) return false;
 					if (!Number.isFinite(logX) || !Number.isFinite(logY)) return false;
-					const bounds = getGraphInteractionBounds(state.layout);
-					if (!bounds) return false;
-					return logX >= (bounds.left - GRAPH_INTERACTION_MARGIN)
-						&& logX <= (bounds.right + GRAPH_INTERACTION_MARGIN)
-						&& logY >= (bounds.top - GRAPH_INTERACTION_MARGIN)
-						&& logY <= (bounds.bottom + GRAPH_INTERACTION_MARGIN);
+					const panelLeftByCircuit = Number.isFinite(state.layout.circuitRight)
+						? (state.layout.circuitRight + 8)
+						: (state.layout.w * 0.55);
+					const panelLeft = Math.min(panelLeftByCircuit, state.layout.w * 0.58);
+					return logX >= panelLeft
+						&& logX <= state.layout.w
+						&& logY >= 0
+						&& logY <= state.layout.h;
 				}
 
 				isOverGraphSurface(evt) {
@@ -7591,7 +9412,6 @@ export class CircuitApp {
 				handleDrop(dropX, dropY) {
 					if (!state.drag) return;
 					const id = state.drag.id;
-						const wasPlacedBeforeDrop = componentIsPlaced(id);
 					const layout = state.layout;
 					// Use both cursor position AND dragged-component centre for hit detection
 					const dragCentreX = state.drag.x;
@@ -7601,14 +9421,12 @@ export class CircuitApp {
 						const hitY = this.rectHit(leftDirectTarget, dropX, dropY) ? dropY : dragCentreY;
 						const insertIndex = hitY < leftDirectTarget.y ? leftDirectTarget.leftSeriesIndex : (leftDirectTarget.leftSeriesIndex + 1);
 						insertIntoLeftSeriesAt(id, insertIndex);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
 					}
 					const leftSeriesZone = layout.leftSeriesInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
 					if (leftSeriesZone) {
 						insertIntoLeftSeriesAt(id, leftSeriesZone.insertIndex);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
 					}
@@ -7618,7 +9436,6 @@ export class CircuitApp {
 
 					if (parallelTarget) {
 						if (addResistorInParallel(id, parallelTarget.id)) {
-								if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 							return;
 						}
@@ -7627,7 +9444,6 @@ export class CircuitApp {
 					const branchZone = layout.wireZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
 					if (branchZone) {
 						insertIntoBranchByTarget(id, branchZone.targetId, branchZone.mode);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
 					}
@@ -7635,7 +9451,6 @@ export class CircuitApp {
 					const seriesZone = layout.stageInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
 					if (seriesZone) {
 						insertAsSeriesAt(id, seriesZone.insertIndex);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 					}
 				}
@@ -7644,17 +9459,13 @@ export class CircuitApp {
 					const pos = this.pointerPos(evt);
 					const raw = this.pointerRawPos(evt);
 					const overGraphSurface = this.isOverGraphSurface(evt);
-					const isLeftButton = evt.button === 0;
-					const isRightButton = evt.button === 2;
 					const SWITCH_TAP_DRAG_THRESHOLD = 4;
-					mainSwitchTapState.active = false;
-					mainSwitchTapState.moved = false;
 					const hitAction = actionHitAreas.find((a) => Math.hypot(pos.x - a.x, pos.y - a.y) <= (a.radius + 3));
 					if (hitAction) {
 						const switchId = switchIdFromActionKey(hitAction.actionKey);
 						const cellId = cellIdFromSliderKey(hitAction.actionKey, CELL_BATTERY_POLARITY_KEYS);
 						if (switchId) {
-							setComponentSwitchClosed(switchId, !isComponentSwitchClosed(switchId));
+							state.switchClosedById[switchId] = !isComponentSwitchClosed(switchId);
 						}
 						if (cellId) state.cellPolarityById[cellId] = getCellPolarity(cellId) * -1;
 						solveCircuit();
@@ -7675,16 +9486,9 @@ export class CircuitApp {
 						evt.preventDefault();
 						return;
 					}
-					if (overGraphSurface && (isLeftButton || isRightButton)) {
+					if (overGraphSurface) {
 						graphDragState.active = true;
-						graphDragState.mode = isRightButton ? "rotate" : (evt.shiftKey ? "tilt" : "pan");
-						if (isRightButton && state.layout) {
-							const graphCenter = getGraphCenter(state.layout);
-							const vx = pos.x - graphCenter.x;
-							const vy = pos.y - graphCenter.y;
-							graphDragState.rotateLastRadius = Math.hypot(vx, vy);
-							graphDragState.rotateLastAngle = Math.atan2(vy, vx);
-						}
+						graphDragState.mode = evt.altKey ? "roll" : (evt.shiftKey ? "rotate" : "pan");
 						graphDragState.lastX = pos.x;
 						graphDragState.lastY = pos.y;
 						canvas.setPointerCapture(evt.pointerId);
@@ -7692,16 +9496,9 @@ export class CircuitApp {
 						evt.preventDefault();
 						return;
 					}
-					if (!isLeftButton) return;
 					if (state.layout && this.switchHit(state.layout, pos.x, pos.y)) {
-						mainSwitchTapState.active = true;
-						mainSwitchTapState.moved = false;
-						mainSwitchTapState.tapStartX = pos.x;
-						mainSwitchTapState.tapStartY = pos.y;
-						mainSwitchTapState.tapThreshold = SWITCH_TAP_DRAG_THRESHOLD;
-						canvas.setPointerCapture(evt.pointerId);
-						canvas.style.cursor = "grabbing";
-						evt.preventDefault();
+						state.switchClosed = !state.switchClosed;
+						resetGraphZoomToFit();
 						return;
 					}
 					const branchSwitchId = this.branchSwitchHit(state.layout, pos.x, pos.y);
@@ -7728,15 +9525,12 @@ export class CircuitApp {
 					}
 					const hit = state.layout.rects.find((rect) => this.rectHit(rect, pos.x, pos.y));
 					if (!hit) {
-						// Only allow whole-canvas panning outside the circuit interaction region.
-						if (!this.isOverGraphPanelAtLogical(pos.x, pos.y)) {
-							viewDragState.active = true;
-							viewDragState.lastRawX = raw.rawX;
-							viewDragState.lastRawY = raw.rawY;
+						viewDragState.active = true;
+						viewDragState.lastRawX = raw.rawX;
+						viewDragState.lastRawY = raw.rawY;
 							canvas.setPointerCapture(evt.pointerId);
 							canvas.style.cursor = "grabbing";
 							evt.preventDefault();
-						}
 						return;
 					}
 					state.drag = {
@@ -7757,39 +9551,14 @@ export class CircuitApp {
 				onPointerMove(evt) {
 					const pos = this.pointerPos(evt);
 					const raw = this.pointerRawPos(evt);
-					if (mainSwitchTapState.active) {
-						const moved = Math.hypot(pos.x - mainSwitchTapState.tapStartX, pos.y - mainSwitchTapState.tapStartY);
-						if (moved > (mainSwitchTapState.tapThreshold || 4)) {
-							mainSwitchTapState.moved = true;
-						}
-						canvas.style.cursor = "grabbing";
-						evt.preventDefault();
-						return;
-					}
 					if (graphDragState.active) {
 						const dx = pos.x - graphDragState.lastX;
 						const dy = pos.y - graphDragState.lastY;
 						if (graphDragState.mode === "rotate") {
-							if (state.layout) {
-								const graphCenter = getGraphCenter(state.layout);
-								const vx = pos.x - graphCenter.x;
-								const vy = pos.y - graphCenter.y;
-								const radius = Math.hypot(vx, vy);
-								const angle = Math.atan2(vy, vx);
-								const minOrbitRadius = 8;
-								if (radius > minOrbitRadius && graphDragState.rotateLastRadius > minOrbitRadius && Number.isFinite(graphDragState.rotateLastAngle)) {
-									const deltaAngle = Math.atan2(
-										Math.sin(angle - graphDragState.rotateLastAngle),
-										Math.cos(angle - graphDragState.rotateLastAngle)
-									);
-									state.graphAzimuth += deltaAngle;
-								}
-								graphDragState.rotateLastRadius = radius;
-								graphDragState.rotateLastAngle = angle;
-							}
-						} else if (graphDragState.mode === "tilt") {
-							state.graphRoll += dx * 0.010;
+							state.graphAzimuth += dx * 0.010;
 							state.graphElevation = clamp(state.graphElevation - dy * 0.010, 0.24, 1.22);
+						} else if (graphDragState.mode === "roll") {
+							state.graphRoll += dx * 0.010;
 						} else {
 							state.graphPanX += dx;
 							state.graphPanY += dy;
@@ -7815,8 +9584,8 @@ export class CircuitApp {
 						const s = sliderHitAreas.find((item) => item.paramKey === sliderDragState.paramKey);
 						if (!s) return;
 						const t = clamp((pos.y - s.trackTop) / (s.trackBottom - s.trackTop), 0, 1);
-						const rawValue = s.max - t * (s.max - s.min);
-						const snapped = Math.round(rawValue / s.step) * s.step;
+						const raw = s.max - t * (s.max - s.min);
+						const snapped = Math.round(raw / s.step) * s.step;
 						const decimals = s.step < 1 ? 1 : 0;
 						const value = Number(clamp(snapped, s.min, s.max).toFixed(decimals));
 						const cellEmfId = cellIdFromSliderKey(s.paramKey, CELL_EMF_SLIDER_KEYS);
@@ -7871,23 +9640,6 @@ export class CircuitApp {
 				}
 
 				finishDrag(evt) {
-					if (mainSwitchTapState.active) {
-						const moved = mainSwitchTapState.moved;
-						mainSwitchTapState.active = false;
-						mainSwitchTapState.moved = false;
-						if (!moved) {
-							setComponentSwitchClosed(MAIN_SWITCH_ID, !isComponentSwitchClosed(MAIN_SWITCH_ID));
-							solveCircuit();
-							if (state.potentialGraphMode) {
-								const fit = computeAutoFitGraphView();
-								state.graphZoom = fit.zoom;
-								state.graphPanX = fit.panX;
-								state.graphPanY = fit.panY;
-							}
-						}
-						canvas.style.cursor = "default";
-						return;
-					}
 					if (graphDragState.active) {
 						graphDragState.active = false;
 						canvas.style.cursor = "default";
@@ -7906,7 +9658,7 @@ export class CircuitApp {
 					}
 					if (!state.drag) return;
 					if (state.drag.isSwitchTapCandidate && isBranchSwitch(state.drag.id)) {
-						setComponentSwitchClosed(state.drag.id, !isComponentSwitchClosed(state.drag.id));
+						state.switchClosedById[state.drag.id] = !isComponentSwitchClosed(state.drag.id);
 						solveCircuit();
 						if (state.potentialGraphMode) {
 							const fit = computeAutoFitGraphView();
@@ -7952,9 +9704,8 @@ export class CircuitApp {
 					}
 					const anchorX = (rawX - state.viewPanX) / state.viewZoom;
 					const anchorY = (rawY - state.viewPanY) / state.viewZoom;
-					const graphCenter = getGraphBaseCenter(state.layout);
-					const graphCenterX = graphCenter.x;
-					const graphCenterY = graphCenter.y;
+					const graphCenterX = (state.layout.circuitRight + state.layout.w) * 0.5;
+					const graphCenterY = state.layout.midY;
 					const oldOriginX = graphCenterX + state.graphPanX;
 					const oldOriginY = graphCenterY + state.graphPanY;
 					const ratio = newZoom / oldZoom;
@@ -7963,11 +9714,6 @@ export class CircuitApp {
 					state.graphPanX = newOriginX - graphCenterX;
 					state.graphPanY = newOriginY - graphCenterY;
 					state.graphZoom = newZoom;
-				}
-
-				onContextMenu(evt) {
-					if (!this.isOverGraphSurface(evt)) return;
-					evt.preventDefault();
 				}
 
 				getTouchDistance(touch1, touch2) {
@@ -8041,7 +9787,37 @@ export class CircuitApp {
 					}
 					const logX = (rawX - state.viewPanX) / state.viewZoom;
 					const logY = (rawY - state.viewPanY) / state.viewZoom;
-					return this.isOverGraphPanelAtLogical(logX, logY);
+					if (this.isOverGraphPanelAtLogical(logX, logY)) {
+						return true;
+					}
+					if (!state.graphTrackGeometry) {
+						return false;
+					}
+					const geom = state.graphTrackGeometry;
+					if (geom.logicalBounds) {
+						const lb = geom.logicalBounds;
+						return logX >= lb.left && logX <= lb.right && logY >= lb.top && logY <= lb.bottom;
+					}
+					const bounds = geom.screenBounds;
+					if (bounds) {
+						return rawX >= bounds.left
+							&& rawX <= bounds.right
+							&& rawY >= bounds.top
+							&& rawY <= bounds.bottom;
+					}
+					if (!geom.screenPath) {
+						return false;
+					}
+					const dpr = window.devicePixelRatio || 1;
+					ctx.save();
+					ctx.setTransform(1, 0, 0, 1, 0, 0);
+					const overGraph = ctx.isPointInPath(
+						geom.screenPath,
+						rawX * dpr,
+						rawY * dpr
+					);
+					ctx.restore();
+					return overGraph;
 				}
 
 				updatePotentialGraphVisibility() {
@@ -8053,7 +9829,6 @@ export class CircuitApp {
 					canvas.addEventListener("pointermove", this.onPointerMove.bind(this));
 					canvas.addEventListener("pointerup", this.finishDrag.bind(this));
 					canvas.addEventListener("pointercancel", this.finishDrag.bind(this));
-					canvas.addEventListener("contextmenu", this.onContextMenu.bind(this));
 					canvas.addEventListener("wheel", this.onWheel.bind(this), { passive: false });
 					canvas.addEventListener("touchstart", this.onTouchStart.bind(this), { passive: false });
 					canvas.addEventListener("touchmove", this.onTouchMove.bind(this), { passive: false });
@@ -8071,7 +9846,6 @@ export class CircuitApp {
 								removeResistorFromStages(r.id);
 								removeFromLeftSeries(r.id);
 							}
-							autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 						});
 
@@ -8117,7 +9891,6 @@ export class CircuitApp {
 								removeResistorFromStages(id);
 								removeFromLeftSeries(id);
 							}
-							autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 						});
 					}
@@ -8139,7 +9912,6 @@ export class CircuitApp {
 								removeResistorFromStages(id);
 								removeFromLeftSeries(id);
 							}
-							autoFitCircuitViewToCanvas();
 							resetGraphZoomToFit();
 						});
 					}
@@ -8152,12 +9924,6 @@ export class CircuitApp {
 
 					potentialGraphCheck.addEventListener("input", () => {
 						state.potentialGraphMode = potentialGraphCheck.checked;
-						if (state.potentialGraphMode) {
-						// Auto-enable voltage color mode when graph is turned on
-						state.voltageColorMode = true;
-						voltageColorCheck.checked = true;
-							autoFitCircuitViewToCanvas();
-						}
 						resetGraphZoomToFit();
 					});
 
@@ -8166,9 +9932,17 @@ export class CircuitApp {
 						resetGraphZoomToFit();
 					});
 
-					if (debugModeCheck) {
-						debugModeCheck.addEventListener("input", () => {
-							setDebugControlsVisible(debugModeCheck.checked);
+					if (wireResistanceSolveCheck) {
+						wireResistanceSolveCheck.checked = !!state.useWireResistanceInSolve;
+						wireResistanceSolveCheck.addEventListener("input", () => {
+							state.useWireResistanceInSolve = wireResistanceSolveCheck.checked;
+							solveCircuit();
+							if (state.potentialGraphMode) {
+								const fit = computeAutoFitGraphView();
+								state.graphZoom = fit.zoom;
+								state.graphPanX = fit.panX;
+								state.graphPanY = fit.panY;
+							}
 						});
 					}
 
@@ -8191,6 +9965,12 @@ export class CircuitApp {
 					wireResLabelsCheck.addEventListener("input", () => {
 						state.wireResistanceLabels = wireResLabelsCheck.checked;
 					});
+
+					if (shortRouteOverlayCheck) {
+						shortRouteOverlayCheck.addEventListener("input", () => {
+							state.shortRouteOverlay = shortRouteOverlayCheck.checked;
+						});
+					}
 				}
 
 				install() {
@@ -8201,7 +9981,6 @@ export class CircuitApp {
 
 			const inputController = new InputController();
 			inputController.install();
-			setDebugControlsVisible(!!(debugModeCheck && debugModeCheck.checked));
 
 			function setSideMenuOpen(open) {
 				sideMenu.classList.toggle("hidden", !open);
@@ -8230,3 +10009,11 @@ export class CircuitApp {
 	}
 
 	new CircuitApp();
+</script>
+</body>
+</html>
+
+
+
+
+

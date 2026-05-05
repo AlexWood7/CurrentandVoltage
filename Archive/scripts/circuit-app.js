@@ -91,6 +91,7 @@ export class CircuitApp {
 				layout: null,
 				graphTrackGeometry: null,
 				drag: null,
+				switchClosed: true,
 				internalR: false,
 				voltageColorMode: false,
 				potentialGraphMode: false,
@@ -116,7 +117,7 @@ export class CircuitApp {
 				cellEmfById: { Cell1: 6, Cell2: 6, Cell3: 6, Cell4: 6 },
 				cellPolarityById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
 				cellRInternalById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
-				switchClosedById: { MAIN_SWITCH: true, S1: true, S2: true, S3: true, S4: true },
+				switchClosedById: { S1: true, S2: true, S3: true, S4: true },
 				useShortSwitchWireResistance: false,
 				resistorValues: { R1: 2.5, R2: 5.0, R3: 7.5, R4: 10.0 },
 				solved: { byId: {}, Itotal: 0, stageNodeV: [0], Vext: 0, switchVLeft: 0, switchVRight: 0, cellTopPlateV: 0, vMin: 0, vMax: 1 }
@@ -152,7 +153,6 @@ export class CircuitApp {
 			const CELL_R_INTERNAL_KEYS = Object.fromEntries(EXTRA_CELL_IDS.map((id) => [id, id + "_rInternal"]));
 			const CELL_EMF_SLIDER_KEYS = Object.fromEntries(EXTRA_CELL_IDS.map((id) => [id, id.toUpperCase() + "_EMF"]));
 			const COMPONENT_SWITCH_TOGGLE_KEYS = Object.fromEntries(EXTRA_SWITCH_IDS.map((id) => [id, id + "_TOGGLE"]));
-			const MAIN_SWITCH_ID = "MAIN_SWITCH";
 
 			function clamp(v, min, max) {
 				return Math.max(min, Math.min(max, v));
@@ -262,10 +262,6 @@ export class CircuitApp {
 				return EXTRA_SWITCH_IDS.includes(id);
 			}
 
-			function isCircuitSwitch(id) {
-				return id === MAIN_SWITCH_ID || isBranchSwitch(id);
-			}
-
 			function getCellEmf(id) {
 				const v = state.cellEmfById[id];
 				return Number.isFinite(v) ? v : 6;
@@ -321,14 +317,9 @@ export class CircuitApp {
 			}
 
 			function isComponentSwitchClosed(id) {
-				if (!isCircuitSwitch(id)) return true;
+				if (!isBranchSwitch(id)) return true;
 				const v = state.switchClosedById[id];
 				return v !== false;
-			}
-
-			function setComponentSwitchClosed(id, closed) {
-				if (!isCircuitSwitch(id)) return;
-				state.switchClosedById[id] = closed !== false;
 			}
 
 			function isOpenBranchSwitch(id) {
@@ -340,7 +331,7 @@ export class CircuitApp {
 					&& seg.role === "switch-open-node-wire"
 					&& (
 						isOpenBranchSwitch(seg.componentId)
-						|| (seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
+						|| (seg.componentId === "MAIN_SWITCH" && !state.switchClosed)
 					));
 			}
 
@@ -390,7 +381,7 @@ export class CircuitApp {
 
 			function componentResistance(id) {
 				if (isExtraCell(id)) return state.internalR ? getCellRInternal(id) : 0;
-				if (isCircuitSwitch(id)) {
+				if (isBranchSwitch(id)) {
 					if (!isComponentSwitchClosed(id)) return SWITCH_OPEN_RESISTANCE;
 					return state.useShortSwitchWireResistance
 						? closedSwitchWireResistance(id)
@@ -401,7 +392,7 @@ export class CircuitApp {
 
 			function componentIntrinsicResistance(id) {
 				if (isExtraCell(id)) return state.internalR ? getCellRInternal(id) : 0;
-				if (isCircuitSwitch(id)) return isComponentSwitchClosed(id) ? 0 : SWITCH_OPEN_RESISTANCE;
+				if (isBranchSwitch(id)) return isComponentSwitchClosed(id) ? 0 : SWITCH_OPEN_RESISTANCE;
 				return resistorValue(id);
 			}
 
@@ -2440,7 +2431,7 @@ export class CircuitApp {
 			function drawSwitch(layout) {
 				const y = layout.yTop;
 				const x = layout.xSwitch;
-				const switchClosed = isComponentSwitchClosed(MAIN_SWITCH_ID);
+				const switchClosed = !!state.switchClosed;
 				const hasTopBoundaryParallelStage = layout.stages.length > 0
 					&& Array.isArray(layout.stages[0].branches)
 					&& layout.stages[0].branches.length > 1;
@@ -3918,10 +3909,9 @@ export class CircuitApp {
 				const topBusVAtX = (x) => topBusXSpan > 1e-6
 					? leftTopV + (networkTopV - leftTopV) * (x - layout.xCell) / topBusXSpan
 					: leftTopV;
-				const mainSwitchClosed = isComponentSwitchClosed(MAIN_SWITCH_ID);
 				// Top bus left: xCell -> xSwitch-16
 				if (layout.xCell < layout.xSwitch - 16 - 1e-6) {
-					if (mainSwitchClosed) {
+					if (state.switchClosed) {
 						segments.push({ x1: layout.xCell, y1: layout.yTop, x2: layout.xSwitch - 16, y2: layout.yTop, v1: leftTopV, v2: topBusVAtX(layout.xSwitch - 16) });
 					} else {
 						segments.push({
@@ -3938,12 +3928,12 @@ export class CircuitApp {
 					}
 				}
 				// Switch blade
-				const bladeRightX = mainSwitchClosed ? (layout.xSwitch + 16) : (layout.xSwitch + 8);
-				const bladeRightY = mainSwitchClosed ? layout.yTop : (layout.yTop - 16);
+				const bladeRightX = state.switchClosed ? (layout.xSwitch + 16) : (layout.xSwitch + 8);
+				const bladeRightY = state.switchClosed ? layout.yTop : (layout.yTop - 16);
 				const rightContactX = layout.xSwitch + 16;
-				const bladeLeftV = mainSwitchClosed ? topBusVAtX(layout.xSwitch - 16) : leftV;
-				const bladeRightV = mainSwitchClosed ? topBusVAtX(Math.min(layout.xSwitch + 16, gradientEndX)) : bladeLeftV;
-				const rightContactV = mainSwitchClosed ? topBusVAtX(Math.min(rightContactX, gradientEndX)) : (Number.isFinite(rightV) ? rightV : networkTopV);
+				const bladeLeftV = state.switchClosed ? topBusVAtX(layout.xSwitch - 16) : leftV;
+				const bladeRightV = state.switchClosed ? topBusVAtX(Math.min(layout.xSwitch + 16, gradientEndX)) : bladeLeftV;
+				const rightContactV = state.switchClosed ? topBusVAtX(Math.min(rightContactX, gradientEndX)) : (Number.isFinite(rightV) ? rightV : networkTopV);
 				segments.push({
 					x1: layout.xSwitch - 16,
 					y1: layout.yTop,
@@ -3953,7 +3943,7 @@ export class CircuitApp {
 					v2: bladeRightV,
 					role: "switch-blade",
 					componentId: "MAIN_SWITCH",
-					isFlatVoltage: !mainSwitchClosed
+					isFlatVoltage: !state.switchClosed
 				});
 				// Top bus right fixed contact wire: xSwitch+16 -> gradientEndX.
 				// Keep this segment even when open so the right-side node stays anchored at the contact.
@@ -4404,11 +4394,11 @@ export class CircuitApp {
 				for (const seg of rawCircuitSegs) {
 					if (!seg) continue;
 					if (seg.role === "switch-blade") {
-						const isOpenSwitch = (seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
+						const isOpenSwitch = (seg.componentId === "MAIN_SWITCH" && !state.switchClosed)
 							|| (seg.componentId && isOpenBranchSwitch(seg.componentId));
 						if (!isOpenSwitch) continue;
 					} else if (seg.role === "switch-open-node-wire") {
-						const isOpenMainSwitch = seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID);
+						const isOpenMainSwitch = seg.componentId === "MAIN_SWITCH" && !state.switchClosed;
 						if (!isOpenMainSwitch) continue;
 					} else {
 						continue;
@@ -5801,11 +5791,10 @@ export class CircuitApp {
 					ctx.save();
 					ctx.lineWidth = 4;
 					ctx.lineCap = "round";
-					const mainSwitchClosed = isComponentSwitchClosed(MAIN_SWITCH_ID);
-					const bladeEndY = mainSwitchClosed ? y : (y - 14);
+					const bladeEndY = state.switchClosed ? y : (y - 14);
 					const bladeStartX = x - 16;
-					const bladeEndX = mainSwitchClosed ? (x + 16) : (x + 14);
-					const bladeEndV = mainSwitchClosed ? rightV : leftV;
+					const bladeEndX = state.switchClosed ? (x + 16) : (x + 14);
+					const bladeEndV = state.switchClosed ? rightV : leftV;
 					if (state.voltageColorMode) {
 						const bladeGrad = ctx.createLinearGradient(bladeStartX, y, bladeEndX, bladeEndY);
 						bladeGrad.addColorStop(0, this.voltageToColor(leftV));
@@ -7654,7 +7643,7 @@ export class CircuitApp {
 						const switchId = switchIdFromActionKey(hitAction.actionKey);
 						const cellId = cellIdFromSliderKey(hitAction.actionKey, CELL_BATTERY_POLARITY_KEYS);
 						if (switchId) {
-							setComponentSwitchClosed(switchId, !isComponentSwitchClosed(switchId));
+							state.switchClosedById[switchId] = !isComponentSwitchClosed(switchId);
 						}
 						if (cellId) state.cellPolarityById[cellId] = getCellPolarity(cellId) * -1;
 						solveCircuit();
@@ -7876,7 +7865,7 @@ export class CircuitApp {
 						mainSwitchTapState.active = false;
 						mainSwitchTapState.moved = false;
 						if (!moved) {
-							setComponentSwitchClosed(MAIN_SWITCH_ID, !isComponentSwitchClosed(MAIN_SWITCH_ID));
+							state.switchClosed = !state.switchClosed;
 							solveCircuit();
 							if (state.potentialGraphMode) {
 								const fit = computeAutoFitGraphView();
@@ -7906,7 +7895,7 @@ export class CircuitApp {
 					}
 					if (!state.drag) return;
 					if (state.drag.isSwitchTapCandidate && isBranchSwitch(state.drag.id)) {
-						setComponentSwitchClosed(state.drag.id, !isComponentSwitchClosed(state.drag.id));
+						state.switchClosedById[state.drag.id] = !isComponentSwitchClosed(state.drag.id);
 						solveCircuit();
 						if (state.potentialGraphMode) {
 							const fit = computeAutoFitGraphView();
