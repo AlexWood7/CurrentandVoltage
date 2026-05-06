@@ -7016,13 +7016,15 @@ export class CircuitApp {
 						const directedCellEmf = isCellEmfPiece && Number.isFinite(sectionEmf)
 							? (Math.abs(sectionEmf) * cellTraversalSign * cellRiseSignAtoB)
 							: NaN;
-						const directedPdPlusEmf = (cached && Number.isFinite(cached.directedPdDisplay) && !isCellEmfPiece)
-							? cached.directedPdDisplay
-							: (isCellEmfPiece
-								? directedCellEmf
-								: (Number.isFinite(wireI)
-									? (-Math.abs(wireI) * sectionR)
-									: directedVoltageForPiece(fromKey, toKey, aKey, bKey, signedDelta)));
+						const directedPdPlusEmf = Number.isFinite(signedDelta)
+							? directedVoltageForPiece(fromKey, toKey, aKey, bKey, signedDelta)
+							: ((cached && Number.isFinite(cached.directedPdDisplay))
+								? cached.directedPdDisplay
+								: (isCellEmfPiece
+									? directedCellEmf
+									: (Number.isFinite(wireI)
+										? (-Math.abs(wireI) * sectionR)
+										: NaN)));
 						const rowRouteIndex = Number.isFinite(piece.segIndex) ? routeIndexBySegmentIndex[piece.segIndex] : null;
 						const rowRouteKey = Number.isFinite(piece.segIndex) ? routeKeyBySegmentIndex[piece.segIndex] : null;
 						let rowColor = "#14354f";
@@ -7185,22 +7187,63 @@ export class CircuitApp {
 							}
 						}
 					}
+
+					const nodeInfoById = new Map();
+					for (const node of nodesOrdered) {
+						if (!node || !node.key) continue;
+						const nodeId = nodeIdByKey.get(node.key);
+						if (!nodeId) continue;
+						nodeInfoById.set(nodeId, node);
+					}
+
+					const disconnectedComponents = [];
+					const seenComponentNodes = new Set();
+					for (const startId of nodeIds) {
+						if (!startId || seenComponentNodes.has(startId)) continue;
+						const component = [];
+						const stack = [startId];
+						seenComponentNodes.add(startId);
+						while (stack.length) {
+							const cur = stack.pop();
+							component.push(cur);
+							const neighbors = nodeConnectionMap.get(cur) || [];
+							for (const n of neighbors) {
+								if (!n || seenComponentNodes.has(n)) continue;
+								seenComponentNodes.add(n);
+								stack.push(n);
+							}
+						}
+						if (component.length && !component.some((id) => anchorConnected.has(id))) {
+							disconnectedComponents.push(component);
+						}
+					}
+
+					for (const component of disconnectedComponents) {
+						let sampledAnchor = null;
+						for (const nodeId of component) {
+							const node = nodeInfoById.get(nodeId);
+							if (!node || !potentialSampler || typeof potentialSampler.potentialAt !== "function") continue;
+							const sampledPotential = potentialSampler.potentialAt(node.x, node.y);
+							const existingPotential = nodePotentialById.get(nodeId);
+							if (!Number.isFinite(sampledPotential) || !Number.isFinite(existingPotential)) continue;
+							sampledAnchor = { sampledPotential, existingPotential };
+							break;
+						}
+						if (!sampledAnchor) continue;
+						const offset = sampledAnchor.sampledPotential - sampledAnchor.existingPotential;
+						if (!Number.isFinite(offset) || Math.abs(offset) <= 1e-12) continue;
+						for (const nodeId of component) {
+							const existingPotential = nodePotentialById.get(nodeId);
+							if (!Number.isFinite(existingPotential)) continue;
+							nodePotentialById.set(nodeId, existingPotential + offset);
+						}
+					}
 					const nodePotentialByKey = {};
 					for (const node of nodesOrdered) {
 						if (!node || !node.key) continue;
 						const nodeId = nodeIdByKey.get(node.key);
 						if (!nodeId) continue;
 						let potential = nodePotentialById.get(nodeId);
-						const isDisconnectedFromAnchor = anchorNodeId && !anchorConnected.has(nodeId);
-						const sampledPotential = isDisconnectedFromAnchor
-							&& potentialSampler
-							&& typeof potentialSampler.potentialAt === "function"
-							? potentialSampler.potentialAt(node.x, node.y)
-							: null;
-						if (isDisconnectedFromAnchor && Number.isFinite(sampledPotential)) {
-							potential = sampledPotential;
-							nodePotentialById.set(nodeId, potential);
-						}
 						if (!Number.isFinite(potential)) continue;
 						nodePotentialByKey[node.key] = potential;
 					}

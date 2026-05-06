@@ -28,60 +28,122 @@ export function createKirchhoffSolver(deps) {
 			}))
 			: [];
 		if (!graphRouteRows.length) {
-			const allSegs = buildCircuitVoltageSegments(layout);
 			const loopParts = [];
 			let totalR = 0;
 			let totalE = 0;
 			const seenComp = new Set();
 			const seenSwitchBlade = new Set();
-			for (const seg of allSegs) {
-				if (!seg) continue;
-				if (!Number.isFinite(seg.x1) || !Number.isFinite(seg.y1) || !Number.isFinite(seg.x2) || !Number.isFinite(seg.y2)) continue;
-				loopParts.push({
-					x1: seg.x1,
-					y1: seg.y1,
-					x2: seg.x2,
-					y2: seg.y2,
-					travDx: seg.x2 - seg.x1,
-					travDy: seg.y2 - seg.y1
-				});
-				if (seg.componentId && seg.role === "component-main") {
-					if (seenComp.has(seg.componentId)) continue;
-					seenComp.add(seg.componentId);
-					const componentId = seg.componentId;
+
+			const routeGraphEdges = routeGraphForSections && Array.isArray(routeGraphForSections.edges)
+				? routeGraphForSections.edges
+				: [];
+			const routeGraphAdjacency = routeGraphForSections && routeGraphForSections.adjacency
+				? routeGraphForSections.adjacency
+				: null;
+			const routeGraphNodes = routeGraphForSections && routeGraphForSections.nodeByKey
+				? routeGraphForSections.nodeByKey
+				: null;
+			const routeGraphSegments = routeGraphForSections && Array.isArray(routeGraphForSections.segments)
+				? routeGraphForSections.segments
+				: [];
+
+			const buildCycleTraversal = () => {
+				if (!routeGraphEdges.length || !routeGraphAdjacency) return null;
+				const attempt = (startEdgeIndex, startFromKey) => {
+					const startEdge = routeGraphEdges[startEdgeIndex];
+					if (!startEdge) return null;
+					const startToKey = startEdge.nodeA === startFromKey ? startEdge.nodeB : startEdge.nodeA;
+					if (!startToKey) return null;
+					const used = new Set([startEdgeIndex]);
+					const steps = [{ edgeIndex: startEdgeIndex, fromKey: startFromKey, toKey: startToKey }];
+					let currentKey = startToKey;
+					let prevEdgeIndex = startEdgeIndex;
+					for (let guard = 0; guard < routeGraphEdges.length + 4; guard++) {
+						if (currentKey === startFromKey) break;
+						const incident = routeGraphAdjacency.get(currentKey) || [];
+						const nextCandidates = incident.filter((ei) => ei !== prevEdgeIndex && !used.has(ei));
+						if (!nextCandidates.length) return null;
+						const nextEdgeIndex = nextCandidates[0];
+						const nextEdge = routeGraphEdges[nextEdgeIndex];
+						if (!nextEdge) return null;
+						const nextKey = nextEdge.nodeA === currentKey ? nextEdge.nodeB : nextEdge.nodeA;
+						if (!nextKey) return null;
+						used.add(nextEdgeIndex);
+						steps.push({ edgeIndex: nextEdgeIndex, fromKey: currentKey, toKey: nextKey });
+						prevEdgeIndex = nextEdgeIndex;
+						currentKey = nextKey;
+					}
+					if (currentKey !== startFromKey) return null;
+					return steps;
+				};
+
+				for (let edgeIndex = 0; edgeIndex < routeGraphEdges.length; edgeIndex++) {
+					const edge = routeGraphEdges[edgeIndex];
+					if (!edge) continue;
+					const forward = attempt(edgeIndex, edge.nodeA);
+					if (forward && forward.length) return forward;
+					const reverse = attempt(edgeIndex, edge.nodeB);
+					if (reverse && reverse.length) return reverse;
+				}
+				return null;
+			};
+
+			const traversalSteps = buildCycleTraversal();
+			const hasCycleTraversal = Array.isArray(traversalSteps) && traversalSteps.length > 0;
+			if (hasCycleTraversal) {
+				for (const step of traversalSteps) {
+					const edge = routeGraphEdges[step.edgeIndex];
+					if (!edge) continue;
+					const fromNode = routeGraphNodes && routeGraphNodes.get(step.fromKey);
+					const toNode = routeGraphNodes && routeGraphNodes.get(step.toKey);
+					if (!fromNode || !toNode) continue;
+					const travDx = toNode.x - fromNode.x;
+					const travDy = toNode.y - fromNode.y;
+					loopParts.push({
+						x1: fromNode.x,
+						y1: fromNode.y,
+						x2: toNode.x,
+						y2: toNode.y,
+						travDx,
+						travDy
+					});
+				}
+			}
+			for (const edge of routeGraphEdges) {
+				const srcSeg = routeGraphSegments[edge.sourceSegmentIndex] || null;
+				if (srcSeg && srcSeg.componentId && srcSeg.role === "component-main") {
+					if (seenComp.has(srcSeg.componentId)) continue;
+					seenComp.add(srcSeg.componentId);
+					const componentId = srcSeg.componentId;
 					const componentR = isBranchSwitch(componentId)
 						? componentIntrinsicResistance(componentId)
 						: componentResistance(componentId);
 					totalR += Math.max(0, componentR);
 					const riseEmf = Number.isFinite(componentEmf(componentId)) ? (-componentEmf(componentId)) : 0;
 					if (Math.abs(riseEmf) > 1e-12) {
-						const segTraversalSign = Math.abs(seg.y2 - seg.y1) >= Math.abs(seg.x2 - seg.x1)
-							? (seg.y2 >= seg.y1 ? 1 : -1)
-							: (seg.x2 >= seg.x1 ? 1 : -1);
-						totalE += riseEmf * segTraversalSign;
+						const travDx = edge.x2 - edge.x1;
+						const travDy = edge.y2 - edge.y1;
+						const segDx = srcSeg.x2 - srcSeg.x1;
+						const segDy = srcSeg.y2 - srcSeg.y1;
+						const dot = travDx * segDx + travDy * segDy;
+						const traversalSign = dot >= 0 ? 1 : -1;
+						totalE += riseEmf * traversalSign;
 					}
 					continue;
 				}
-				if (seg.componentId && seg.role === "switch-blade") {
-					if (seenSwitchBlade.has(seg.componentId)) continue;
-					seenSwitchBlade.add(seg.componentId);
-					if (isComponentSwitchClosed(seg.componentId)) {
-						const bladeLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+
+				if (srcSeg && srcSeg.componentId && srcSeg.role === "switch-blade") {
+					if (seenSwitchBlade.has(srcSeg.componentId)) continue;
+					seenSwitchBlade.add(srcSeg.componentId);
+					if (isComponentSwitchClosed(srcSeg.componentId)) {
+						const bladeLen = Math.hypot(srcSeg.x2 - srcSeg.x1, srcSeg.y2 - srcSeg.y1);
 						totalR += Math.max(0, bladeLen * SHORT_WIRE_R_PER_PIXEL);
 					} else {
-						totalR += Math.max(0, componentIntrinsicResistance(seg.componentId));
+						totalR += Math.max(0, componentIntrinsicResistance(srcSeg.componentId));
 					}
 					continue;
 				}
-			}
-			const routeGraphEdges = routeGraphForSections && Array.isArray(routeGraphForSections.edges)
-				? routeGraphForSections.edges
-				: [];
-			for (const edge of routeGraphEdges) {
-				const srcSeg = routeGraphForSections && Array.isArray(routeGraphForSections.segments)
-					? routeGraphForSections.segments[edge.sourceSegmentIndex]
-					: null;
-				if (srcSeg && (srcSeg.role === "component-main" || srcSeg.role === "switch-blade") && srcSeg.componentId) continue;
+
 				const baseLen = Math.hypot(edge.x2 - edge.x1, edge.y2 - edge.y1);
 				if (!(baseLen > 0)) continue;
 				const nodeA = routeGraphForSections.nodeByKey && routeGraphForSections.nodeByKey.get(edge.nodeA);
@@ -122,7 +184,8 @@ export function createKirchhoffSolver(deps) {
 				routeKey: "J1|J1",
 				routeIndex: 0,
 				isGraphRoute: true,
-				isSeriesFallback: true
+				isSeriesFallback: true,
+				noCycleTraversal: !hasCycleTraversal
 			}];
 		}
 
@@ -192,18 +255,21 @@ export function createKirchhoffSolver(deps) {
 		};
 
 		const sectionRows = graphRouteRows;
-		let networkSolution = solveJunctionNetwork(sectionRows);
-		if (!networkSolution && sectionRows.length === 1 && sectionRows[0].isSeriesFallback === true) {
+		let networkSolution = null;
+		if (sectionRows.length === 1 && sectionRows[0].isSeriesFallback === true) {
 			const row = sectionRows[0];
-			// Use E/R from the route-graph measurement so I is consistent with the R(total) and
-			// SumEmf columns shown in the Kirchhoff debug table.  Using state.solved.Itotal here
-			// caused a mismatch because it was computed by the matrix solver with geometrically-
-			// estimated wire lengths (different resistance model).
-			const I = row.R > 1e-12 ? (row.E / row.R) : 0;
+			// If no complete cycle traversal exists, rely on the main matrix current so open-switch
+			// behavior stays consistent with the large-resistance model used by the core solver.
+			// Otherwise, keep E/R so Kirchhoff table columns remain self-consistent.
+			const I = row.noCycleTraversal
+				? (Number.isFinite(state.solved.Itotal) ? state.solved.Itotal : 0)
+				: (row.R > 1e-12 ? (row.E / row.R) : 0);
 			networkSolution = {
 				nodeV: new Map([["J1", 0]]),
 				branchResults: [{ I, Vr: I * row.R, netPd: 0 }]
 			};
+		} else {
+			networkSolution = solveJunctionNetwork(sectionRows);
 		}
 		if (!networkSolution) {
 			state.solved.kirchhoffSectionData = null;

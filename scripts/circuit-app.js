@@ -1,4 +1,4 @@
-
+﻿
 import { resistorDefs, EXTRA_CELL_IDS, EXTRA_SWITCH_IDS, graphOrientationDefaults, GRAPH_VOLTS_TO_HEIGHT, GRAPH_XY_SCALE_BASE, GRAPH_VERTICAL_MARGIN, GRAPH_AUTO_FIT_SCALE, GRAPH_MIN_AUTO_ZOOM, GRAPH_CIRCUIT_MARGIN, GRAPH_SIDE_MARGIN, GRAPH_PATH_HALF_WIDTH, CONNECTOR_WIRE, BUS_CONNECTOR, END_BUS_CONNECTOR, MAX_PARALLEL_BRANCHES, EMF_BODY_HEIGHT, CELL_PADDING, RES_W, RES_H, RE_LEAD_TOP, RES_LEAD_BOTTOM, RES_PITCH, SERIES_LEAD_BOTTOM, SERIES_PITCH, PARALLEL_GAP, INSERT_RAIL_DIST, STAGE_GAP, PARALLEL_MULTI_STAGE_LEAD_TOP_BOOST, PARALLEL_MULTI_STAGE_LEAD_BOTTOM_BOOST, PARALLEL_PAIR_STAGE_GAP_BOOST, INTERNAL_R_HEIGHT_EXTRA, SINGLE_RESISTOR_INTERNAL_MIN_HEIGHT, NO_INTERNAL_TOP_LAYOUT_GAP_BOOST, COMPONENT_RAMP_OVERSHOOT, INTERNAL_COMBO_CENTER_OFFSET, RESISTOR_VALUE_MIN, RESISTOR_VALUE_MAX, SHORT_WIRE_R_PER_PIXEL, SHORT_CIRCUIT_CURRENT_THRESHOLD_A, HIGH_CURRENT_WARNING_THRESHOLD_A, GRAPH_COMPONENT_MIN_WIDTH_FACTOR, SWITCH_OPEN_RESISTANCE, PRIMARY_CELL_ID, CELL2_ID } from "./modules/constants.js";
 import { createInitialState } from "./modules/state.js";
 import { CircuitLayoutEngine } from "./modules/layout.js";
@@ -43,6 +43,7 @@ export class CircuitApp {
 			const debugJunctionIdsCheck = document.getElementById("debugJunctionIds");
 			const debugNodePotentialsCheck = document.getElementById("debugNodePotentials");
 			const wireResLabelsCheck = document.getElementById("wireResLabels");
+			const nodesIRLabelsCheck = document.getElementById("nodesIRLabels");
 			const potentialGraphChip = document.getElementById("potentialGraphChip");
 			const rValueInputs = Object.fromEntries(resistorDefs.map((r) => [r.id, document.getElementById(r.id + "box")]));
 			const sliderHitAreas = [];
@@ -100,6 +101,7 @@ export class CircuitApp {
 				debugJunctionIds: false,
 				debugNodePotentials: false,
 				wireResistanceLabels: false,
+				nodesIRLabels: false,
 				sectionColorByPairKey: {},
 				sectionHighCurrentPairGeometries: [],
 				wireLabelNodePairRows: [],
@@ -281,10 +283,12 @@ export class CircuitApp {
 				if (debugJunctionIdsCheck) debugJunctionIdsCheck.checked = false;
 				if (debugNodePotentialsCheck) debugNodePotentialsCheck.checked = false;
 				if (wireResLabelsCheck) wireResLabelsCheck.checked = false;
+				if (nodesIRLabelsCheck) nodesIRLabelsCheck.checked = false;
 				state.debugLabels = false;
 				state.debugJunctionIds = false;
 				state.debugNodePotentials = false;
 				state.wireResistanceLabels = false;
+				state.nodesIRLabels = false;
 			}
 
 			function getCellPolarity(id) {
@@ -344,10 +348,20 @@ export class CircuitApp {
 					));
 			}
 
+			function isOpenSwitchGapVoltageSegment(seg) {
+				return !!(seg
+					&& seg.role === "switch-blade"
+					&& seg.isFlatVoltage !== true
+					&& (
+						(seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
+						|| (seg.componentId && isOpenBranchSwitch(seg.componentId))
+					));
+			}
+
 			function shouldParticipateInSecondarySolveSegment(seg) {
 				if (!seg) return false;
-				if (seg.isFlatVoltage) return false;
 				if (isNodeToOpenSwitchVoltageSegment(seg)) return false;
+				if (seg.isFlatVoltage) return false;
 				return true;
 			}
 
@@ -1271,6 +1285,10 @@ export class CircuitApp {
 				return !!(state.wireResistanceLabels || (wireResLabelsCheck && wireResLabelsCheck.checked));
 			}
 
+			function nodesIRLabelsEnabled() {
+				return !!(state.nodesIRLabels || (nodesIRLabelsCheck && nodesIRLabelsCheck.checked));
+			}
+
 			function branchGroupingLabelsEnabled() {
 				return !!state.debugLabels;
 			}
@@ -1640,13 +1658,15 @@ export class CircuitApp {
 						const travDy = (fromNode && toNode) ? (toNode.y - fromNode.y) : 0;
 						routeParts.push({ x1: edge.x1, y1: edge.y1, x2: edge.x2, y2: edge.y2, travDy });
 						const srcSeg = segments[edge.sourceSegmentIndex];
-						if (srcSeg && srcSeg.role === "component-main" && srcSeg.componentId) {
+						if (srcSeg && srcSeg.componentId && (srcSeg.role === "component-main" || srcSeg.role === "switch-blade")) {
 							if (!seenComponents.has(srcSeg.componentId)) {
 								seenComponents.add(srcSeg.componentId);
 								const componentId = srcSeg.componentId;
-								const componentR = isBranchSwitch(componentId)
+								const componentR = srcSeg.role === "switch-blade"
 									? componentIntrinsicResistance(componentId)
-									: componentResistance(componentId);
+									: (isBranchSwitch(componentId)
+										? componentIntrinsicResistance(componentId)
+										: componentResistance(componentId));
 								routeR += Math.max(0, componentR);
 								// componentEmf uses solver drop-convention; section table E uses rise-convention.
 								const emf = Number.isFinite(componentEmf(srcSeg.componentId)) ? (-componentEmf(srcSeg.componentId)) : 0;
@@ -2079,10 +2099,10 @@ export class CircuitApp {
 					const dx = seg.x2 - seg.x1;
 					const dy = seg.y2 - seg.y1;
 					const rawLen = Math.hypot(dx, dy);
+					if (!(rawLen > 1e-9)) continue;
 					const len = Number.isFinite(segmentEffectiveLengthByIndex[si])
 						? segmentEffectiveLengthByIndex[si]
 						: rawLen;
-					if (!labelEligibleByIndex[si]) continue;
 					const isComponentSegment = seg && seg.role === "component-main" && !!seg.componentId;
 					let segmentR = Math.max(0, Number.isFinite(baseResistanceByIndex[si]) ? baseResistanceByIndex[si] : 0);
 					segmentR += Math.max(0, Number.isFinite(tinyResistanceCarryByIndex[si]) ? tinyResistanceCarryByIndex[si] : 0);
@@ -2097,7 +2117,6 @@ export class CircuitApp {
 					const fontSize = rawLen < 24 ? 10 : 12;
 					const sx = (mx - nx * labelOffset) * state.viewZoom + state.viewPanX;
 					const sy = (my - ny * labelOffset) * state.viewZoom + state.viewPanY;
-					if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
 					let rowColor = "rgba(15, 100, 45, 1)";
 					let matched = false;
 					const routeKey = routeKeyBySegmentIndex[si] || null;
@@ -2133,7 +2152,11 @@ export class CircuitApp {
 					if (isFlatNodeOpenSwitchWire) {
 						wireI = 0;
 					}
-					if (!isFlatNodeOpenSwitchWire && isComponentSegment && Number.isFinite(componentEffectiveI)) {
+					// For components, prefer routedSegmentCurrentByIndex which has the
+					// routedOrientationMetric correction applied, over componentEffectiveI which does not.
+					if (!isFlatNodeOpenSwitchWire && isComponentSegment && Number.isFinite(routedSegmentCurrentByIndex[si])) {
+						wireI = routedSegmentCurrentByIndex[si];
+					} else if (!isFlatNodeOpenSwitchWire && isComponentSegment && Number.isFinite(componentEffectiveI)) {
 						wireI = componentEffectiveI;
 					}
 					if (!isFlatNodeOpenSwitchWire && !isComponentSegment && Number.isFinite(shortLoopSegmentCurrentByIndex[si])) {
@@ -2163,8 +2186,14 @@ export class CircuitApp {
 					if (isSeriesFallbackSolve && state.solved && Number.isFinite(state.solved.Itotal)) {
 						const loopAbsI = Math.abs(state.solved.Itotal);
 						const dv = (Number.isFinite(seg.v1) && Number.isFinite(seg.v2)) ? (seg.v2 - seg.v1) : NaN;
+						const loopSign = Number.isFinite(seriesLoopCurrentSignBySegmentIndex[si])
+							? seriesLoopCurrentSignBySegmentIndex[si]
+							: NaN;
 						if (isComponentSegment) {
-							if (!Number.isFinite(wireI) || Math.abs(wireI) <= 1e-12) {
+							// Use the same orientation-corrected loop sign as wire segments.
+							if (Number.isFinite(loopSign) && Math.abs(loopSign) > 0) {
+								wireI = loopSign * loopAbsI;
+							} else if (!Number.isFinite(wireI) || Math.abs(wireI) <= 1e-12) {
 								if (Number.isFinite(dv) && Math.abs(dv) > 1e-12) {
 									wireI = -Math.sign(dv) * loopAbsI;
 								} else {
@@ -2172,9 +2201,6 @@ export class CircuitApp {
 								}
 							}
 						} else {
-							const loopSign = Number.isFinite(seriesLoopCurrentSignBySegmentIndex[si])
-								? seriesLoopCurrentSignBySegmentIndex[si]
-								: NaN;
 							if (Number.isFinite(loopSign) && Math.abs(loopSign) > 0) {
 								wireI = loopSign * loopAbsI;
 							} else if (Number.isFinite(dv) && Math.abs(dv) > 1e-12) {
@@ -2236,6 +2262,7 @@ export class CircuitApp {
 					const currentDirectionSign = (Number.isFinite(arrowCurrent) || isInfiniteCurrentValue(arrowCurrent))
 						? (arrowCurrent < 0 ? -1 : 1)
 						: NaN;
+					const isOpenSwitchGap = isOpenSwitchGapVoltageSegment(seg);
 					const isCellEmfSegment = !!(isComponentSegment
 						&& isExtraCell(seg.componentId)
 						&& seg.componentSection === "cell-emf");
@@ -2245,7 +2272,9 @@ export class CircuitApp {
 					const cellEmfMagnitude = (isCellEmfSegment && Number.isFinite(componentEmf(seg.componentId)))
 						? Math.abs(componentEmf(seg.componentId))
 						: NaN;
-					const pdPlusEmfDirected = isCellEmfSegment
+					const pdPlusEmfDirected = isOpenSwitchGap
+						? (Number.isFinite(pdSignedValue) ? pdSignedValue : NaN)
+						: (isCellEmfSegment
 						? (Number.isFinite(cellEmfMagnitude)
 							? cellEmfMagnitude
 							: (Number.isFinite(pdSignedValue) ? Math.abs(pdSignedValue) : NaN))
@@ -2253,7 +2282,7 @@ export class CircuitApp {
 							? resistiveDirected
 						: (Number.isFinite(pdSignedValue)
 							? (Number.isFinite(currentDirectionSign) ? (pdSignedValue * currentDirectionSign) : pdSignedValue)
-							: NaN));
+							: NaN)));
 					const formatSignedWireVoltage = (v) => {
 						if (!Number.isFinite(v)) return null;
 						const txt = formatWireVoltagePD(v);
@@ -2281,7 +2310,8 @@ export class CircuitApp {
 						isComponentSegment,
 						componentId: seg.componentId || null
 					};
-					if (!showWireLabels) continue;
+					if (!showWireLabels || !labelEligibleByIndex[si]) continue;
+					if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
 					const currentArrow = currentArrowForSegment(seg, arrowCurrent);
 					const labelWithArrow = `${currentArrow} ${label}`;
 					const labelLines = [labelWithArrow];
@@ -2313,6 +2343,28 @@ export class CircuitApp {
 			}
 
 			function buildWireLabelNodeRegistry(layout) {
+				const tableRows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
+				if (tableRows.length) {
+					const nodeKeySet = new Set();
+					for (const row of tableRows) {
+						if (row && row.fromKey) nodeKeySet.add(String(row.fromKey));
+						if (row && row.toKey) nodeKeySet.add(String(row.toKey));
+					}
+					const nodes = Array.from(nodeKeySet)
+						.map((key) => {
+							const bits = key.split("|");
+							if (bits.length !== 2) return null;
+							const x = Number(bits[0]);
+							const y = Number(bits[1]);
+							if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+							return { x, y };
+						})
+						.filter(Boolean)
+						.sort((a, b) => (a.y - b.y) || (a.x - b.x))
+						.map((n, i) => ({ ...n, id: "N" + (i + 1) }));
+					return { nodes };
+				}
+
 				if (!layout) return { nodes: [] };
 				const routeGraph = buildCircuitRouteGraph(layout);
 				const segments = routeGraph && Array.isArray(routeGraph.segments)
@@ -2372,6 +2424,141 @@ export class CircuitApp {
 					ctx.strokeRect(tx - 2, ty - 6, tw + 4, 12);
 					ctx.fillStyle = "rgba(20,53,79,0.98)";
 					ctx.fillText(text, tx, ty);
+				}
+				ctx.restore();
+			}
+
+			function drawNodesIRLabelsOverlay(layout) {
+				if (!nodesIRLabelsEnabled()) return;
+				if (!layout) return;
+				const rows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
+				const potentialByKey = (state && state.wireLabelNodePotentialByKey && typeof state.wireLabelNodePotentialByKey === "object")
+					? state.wireLabelNodePotentialByKey
+					: null;
+				if (!rows.length || !potentialByKey) return;
+
+				const nodeKeySet = new Set();
+				for (const row of rows) {
+					if (row && row.fromKey) nodeKeySet.add(String(row.fromKey));
+					if (row && row.toKey) nodeKeySet.add(String(row.toKey));
+				}
+				if (!nodeKeySet.size) return;
+
+				const parseKeyToPoint = (key) => {
+					const bits = String(key || "").split("|");
+					if (bits.length !== 2) return null;
+					const x = Number(bits[0]);
+					const y = Number(bits[1]);
+					if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+					return { x, y };
+				};
+
+				const nodesOrdered = Array.from(nodeKeySet)
+					.map((key) => ({ key, p: parseKeyToPoint(key) }))
+					.filter((entry) => !!entry.p)
+					.sort((a, b) => (a.p.y - b.p.y) || (a.p.x - b.p.x));
+				if (!nodesOrdered.length) return;
+
+				const nodeIdByKey = new Map();
+				for (let i = 0; i < nodesOrdered.length; i++) {
+					nodeIdByKey.set(nodesOrdered[i].key, "N" + (i + 1));
+				}
+
+				const arrowForRow = (row, p1, p2) => {
+					const dx = p2.x - p1.x;
+					const dy = p2.y - p1.y;
+					const horizontal = Math.abs(dx) >= Math.abs(dy);
+					if (!Number.isFinite(row.current) || Math.abs(row.current) <= 1e-12) {
+						return horizontal ? "\u2194" : "\u2195";
+					}
+					if (horizontal) return dx >= 0 ? "\u2192" : "\u2190";
+					return dy >= 0 ? "\u2193" : "\u2191";
+				};
+
+				const formatSignedWireVoltage = (v) => {
+					if (!Number.isFinite(v)) return null;
+					const txt = formatWireVoltagePD(v);
+					return v >= 0 ? `+${txt}` : txt;
+				};
+
+				ctx.save();
+				const dpr = window.devicePixelRatio || 1;
+				ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+				ctx.textAlign = "center";
+				ctx.textBaseline = "middle";
+
+				for (const row of rows) {
+					if (!row || !row.fromKey || !row.toKey) continue;
+					const p1 = parseKeyToPoint(row.fromKey);
+					const p2 = parseKeyToPoint(row.toKey);
+					if (!p1 || !p2) continue;
+					const rawLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+					if (!(rawLen > 6)) continue;
+
+					const dx = p2.x - p1.x;
+					const dy = p2.y - p1.y;
+					const mx = (p1.x + p2.x) * 0.5;
+					const my = (p1.y + p2.y) * 0.5;
+					const nx = -dy / rawLen;
+					const ny = dx / rawLen;
+					const fontSize = rawLen < 24 ? 10 : 12;
+					const lineH = fontSize + 4;
+					const labelOffset = rawLen < 24 ? 11 : 16;
+					const sx = (mx - nx * labelOffset) * state.viewZoom + state.viewPanX;
+					const sy = (my - ny * labelOffset) * state.viewZoom + state.viewPanY;
+					if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
+
+					const arrow = arrowForRow(row, p1, p2);
+					const rText = `${arrow} ${formatCompactWireResistance(Math.max(0, Number.isFinite(row.R) ? row.R : 0))}`;
+					const dvText = formatSignedWireVoltage(row.pdPlusEmf);
+					const iText = Number.isFinite(row.current)
+						? `I ${formatCurrentLabel(row.current, state.solved && state.solved.forceInfiniteAllCurrents === true)}`
+						: null;
+					const labelLines = [rText];
+					if (dvText) labelLines.push(dvText);
+					if (iText) labelLines.push(iText);
+
+					ctx.font = `700 ${fontSize}px system-ui, sans-serif`;
+					const tw = Math.max(...labelLines.map((line) => ctx.measureText(line).width));
+					const totalH = labelLines.length * lineH + 2;
+					const boxTop = sy - (labelLines.length - 1) * lineH / 2 - fontSize * 0.65;
+
+					ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+					ctx.fillRect(sx - tw / 2 - 3, boxTop, tw + 6, totalH);
+					ctx.strokeStyle = "rgba(45, 55, 90, 0.28)";
+					ctx.lineWidth = 1;
+					ctx.strokeRect(sx - tw / 2 - 3, boxTop, tw + 6, totalH);
+
+					ctx.fillStyle = row.rowColor || "rgba(20,53,79,0.98)";
+					for (let li = 0; li < labelLines.length; li++) {
+						const lineY = sy - (labelLines.length - 1) * lineH / 2 + li * lineH;
+						ctx.fillText(labelLines[li], sx, lineY);
+					}
+				}
+
+				ctx.textAlign = "left";
+				ctx.textBaseline = "middle";
+				ctx.font = "700 10px system-ui, sans-serif";
+				for (const entry of nodesOrdered) {
+					const node = entry.p;
+					const nodeId = nodeIdByKey.get(entry.key) || "?";
+					const potential = potentialByKey[entry.key];
+					const nodeText = Number.isFinite(potential)
+						? `${nodeId} ${formatWireVoltagePD(potential)}`
+						: nodeId;
+					const sx = node.x * state.viewZoom + state.viewPanX;
+					const sy = node.y * state.viewZoom + state.viewPanY;
+					if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
+					const tw = ctx.measureText(nodeText).width;
+					const tx = sx + 6;
+					const ty = sy - 8;
+					ctx.fillStyle = "rgba(255,255,255,0.92)";
+					ctx.strokeStyle = "rgba(40,70,120,0.35)";
+					ctx.lineWidth = 1;
+					ctx.fillRect(tx - 2, ty - 6, tw + 4, 12);
+					ctx.strokeRect(tx - 2, ty - 6, tw + 4, 12);
+					ctx.fillStyle = "rgba(20,53,79,0.98)";
+					ctx.fillText(nodeText, tx, ty);
 				}
 				ctx.restore();
 			}
@@ -3436,6 +3623,8 @@ export class CircuitApp {
 					: (sol && Number.isFinite(sol.Vtop) ? sol.Vtop : 0);
 				const exitV = Number.isFinite(options.exitV) ? options.exitV
 					: (sol && Number.isFinite(sol.Vbottom) ? sol.Vbottom : entryV);
+				const itemTopV = (sol && Number.isFinite(sol.Vtop)) ? sol.Vtop : entryV;
+				const itemBottomV = (sol && Number.isFinite(sol.Vbottom)) ? sol.Vbottom : exitV;
 				const switchClosed = isComponentSwitchClosed(item.id);
 				const contactTopY = item.y - 16;
 				const contactBottomY = item.y + 16;
@@ -3450,7 +3639,7 @@ export class CircuitApp {
 							x2: item.x,
 							y2: contactTopY,
 							v1: entryV,
-							v2: entryV
+							v2: itemTopV
 						});
 					}
 
@@ -3459,11 +3648,23 @@ export class CircuitApp {
 						y1: contactTopY,
 						x2: bladeEndX,
 						y2: bladeEndY,
-						v1: entryV,
-						v2: entryV,
+						v1: itemTopV,
+						v2: itemTopV,
 						role: "switch-blade",
 						componentId: item.id,
 						isFlatVoltage: true
+					});
+
+					// Model the open switch gap as the high-resistance element between contacts.
+					segments.push({
+						x1: bladeEndX,
+						y1: bladeEndY,
+						x2: item.x,
+						y2: contactBottomY,
+						v1: itemTopV,
+						v2: itemBottomV,
+						role: "switch-blade",
+						componentId: item.id
 					});
 
 					if (contactBottomY < exitY - 1e-6) {
@@ -3472,7 +3673,7 @@ export class CircuitApp {
 							y1: contactBottomY,
 							x2: item.x,
 							y2: exitY,
-							v1: exitV,
+							v1: itemBottomV,
 							v2: exitV
 						});
 					}
@@ -3955,6 +4156,19 @@ export class CircuitApp {
 					componentId: "MAIN_SWITCH",
 					isFlatVoltage: !mainSwitchClosed
 				});
+				if (!mainSwitchClosed) {
+					// Explicitly include the open contact gap as the high-resistance switch path.
+					segments.push({
+						x1: bladeRightX,
+						y1: bladeRightY,
+						x2: rightContactX,
+						y2: layout.yTop,
+						v1: bladeRightV,
+						v2: rightContactV,
+						role: "switch-blade",
+						componentId: "MAIN_SWITCH"
+					});
+				}
 				// Top bus right fixed contact wire: xSwitch+16 -> gradientEndX.
 				// Keep this segment even when open so the right-side node stays anchored at the contact.
 				if (rightContactX < gradientEndX - 1e-6) {
@@ -4331,12 +4545,18 @@ export class CircuitApp {
 					if (!row) return "wire";
 					if (row.kind === "component") return "component-main";
 					if (row.kind === "shoulder") return "shoulder-wire";
+					if (row.kind === "switch") return "switch-blade";
 					return "wire";
 				};
 
 				const out = [];
 				for (const row of nodePairRows) {
 					if (!row || !row.fromKey || !row.toKey) continue;
+					if (row.kind === "switch"
+						&& ((row.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
+							|| (row.componentId && isOpenBranchSwitch(row.componentId)))) {
+						continue;
+					}
 					const fromKey = String(row.fromKey);
 					const toKey = String(row.toKey);
 					const fromNode = routeGraph.nodeByKey.get(fromKey);
@@ -4390,8 +4610,10 @@ export class CircuitApp {
 			function collectPotentialGraphSegments(layout) {
 				const rawCircuitSegs = buildCircuitVoltageSegments(layout);
 				const tableSegs = buildTableDrivenGraphSegments(layout);
-				const segs = tableSegs ? tableSegs.slice() : rawCircuitSegs.slice();
+				const segs = (tableSegs ? tableSegs.slice() : rawCircuitSegs.slice())
+					.filter((seg) => !isOpenSwitchGapVoltageSegment(seg));
 				if (!tableSegs) return segs;
+
 				const hasSegment = (candidate) => segs.some((s) =>
 					Math.abs(s.x1 - candidate.x1) < 1e-6
 					&& Math.abs(s.y1 - candidate.y1) < 1e-6
@@ -4401,18 +4623,16 @@ export class CircuitApp {
 					&& Math.abs(s.v2 - candidate.v2) < 1e-6
 					&& (s.role || "") === (candidate.role || "")
 				);
+
 				for (const seg of rawCircuitSegs) {
 					if (!seg) continue;
-					if (seg.role === "switch-blade") {
-						const isOpenSwitch = (seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
-							|| (seg.componentId && isOpenBranchSwitch(seg.componentId));
-						if (!isOpenSwitch) continue;
-					} else if (seg.role === "switch-open-node-wire") {
-						const isOpenMainSwitch = seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID);
-						if (!isOpenMainSwitch) continue;
-					} else {
-						continue;
-					}
+					if (isOpenSwitchGapVoltageSegment(seg)) continue;
+					const keepOpenSwitchVisual = isNodeToOpenSwitchVoltageSegment(seg)
+						|| (seg.role === "switch-blade"
+							&& seg.isFlatVoltage === true
+							&& ((seg.componentId === MAIN_SWITCH_ID && !isComponentSwitchClosed(MAIN_SWITCH_ID))
+								|| (seg.componentId && isOpenBranchSwitch(seg.componentId))));
+					if (!keepOpenSwitchVisual) continue;
 					if (!hasSegment(seg)) segs.push(seg);
 				}
 				return segs;
@@ -4547,6 +4767,14 @@ export class CircuitApp {
 				function endpointKey(x, y, v) {
 					return x.toFixed(3) + "|" + y.toFixed(3) + "|" + v.toFixed(3);
 				}
+				const openGapJointKeys = new Set();
+				for (const rawSeg of buildCircuitVoltageSegments(layout)) {
+					if (!isOpenSwitchGapVoltageSegment(rawSeg)) continue;
+					const gv1 = graphV(rawSeg.v1);
+					const gv2 = graphV(rawSeg.v2);
+					openGapJointKeys.add(endpointKey(rawSeg.x1, rawSeg.y1, gv1));
+					openGapJointKeys.add(endpointKey(rawSeg.x2, rawSeg.y2, gv2));
+				}
 
 				const jointMap = new Map();
 				for (const s of segs) {
@@ -4570,7 +4798,11 @@ export class CircuitApp {
 					jointMap.get(startKey).maxHalfWidth = Math.max(jointMap.get(startKey).maxHalfWidth || 0, segStartHalfWidth);
 					jointMap.get(endKey).maxHalfWidth = Math.max(jointMap.get(endKey).maxHalfWidth || 0, segEndHalfWidth);
 					const shortJoinSegment = len <= Math.max(segStartHalfWidth, segEndHalfWidth) * 1.15;
-					if (shortJoinSegment) {
+					const shortSwitchJoin = shortJoinSegment
+						&& (s.role === "switch-blade"
+							|| isNodeToOpenSwitchVoltageSegment(s)
+							|| isOpenSwitchGapVoltageSegment(s));
+					if (shortSwitchJoin) {
 						jointMap.get(startKey).skipTrim = true;
 						jointMap.get(endKey).skipTrim = true;
 					}
@@ -4643,6 +4875,11 @@ export class CircuitApp {
 						}
 						if (joint.hasCorner) break;
 					}
+				}
+				for (const key of openGapJointKeys) {
+					const joint = jointMap.get(key);
+					if (!joint) continue;
+					joint.skipTrim = true;
 				}
 
 				const firstStage = (layout.stages && layout.stages.length) ? layout.stages[0] : null;
@@ -4887,10 +5124,10 @@ export class CircuitApp {
 					const endHasWidthTransition = !!endWidthStats && (endWidthStats.max - endWidthStats.min) > 0.1;
 					const drawStartVertical = (startArrivals !== 1) || startHasWidthTransition || !!s.forceStartVertical;
 					const drawEndVertical = (endArrivals !== 1) || endHasWidthTransition || !!s.forceEndVertical;
-					const startCornerTrim = (startJoint?.hasCorner && !startJoint?.hasSwitch)
+					const startCornerTrim = (startJoint?.hasCorner && !startJoint?.hasSwitch && !startJoint?.skipTrim)
 						? Math.max(segStartHalfWidth, startJoint?.maxHalfWidth || 0)
 						: 0;
-					const endCornerTrim = (endJoint?.hasCorner && !endJoint?.hasSwitch)
+					const endCornerTrim = (endJoint?.hasCorner && !endJoint?.hasSwitch && !endJoint?.skipTrim)
 						? Math.max(segEndHalfWidth, endJoint?.maxHalfWidth || 0)
 						: 0;
 					let startTrim = startCornerTrim;
@@ -5054,6 +5291,7 @@ export class CircuitApp {
 					if (joint.count < 2) continue;
 					if (!joint.hasCorner) continue;
 					if (joint.hasSwitch) continue;
+					if (openGapJointKeys.has(key)) continue;
 					const parts = key.split("|");
 					const jx = Number(parts[0]);
 					const jy = Number(parts[1]);
@@ -5902,7 +6140,20 @@ export class CircuitApp {
 					const displayCurrent = shortAdjustedInfinite
 						? (current < 0 ? -Infinity : Infinity)
 						: ((state.solved && isInfiniteCurrentValue(state.solved.Itotal)) ? state.solved.Itotal : current);
-					const dir = displayCurrent < 0 ? -1 : 1;
+					const leftBottomV = Number.isFinite(state.solved?.Vext) ? state.solved.Vext : NaN;
+					const rightBottomV = Number.isFinite(state.solved?.bottomRightV) ? state.solved.bottomRightV : NaN;
+					let directionCurrent = displayCurrent;
+					if (Number.isFinite(leftBottomV) && Number.isFinite(rightBottomV)) {
+						const dv = rightBottomV - leftBottomV;
+						if (Math.abs(dv) > 1e-12) {
+							const signFromBottomSegment = -Math.sign(dv);
+							const mag = (Number.isFinite(displayCurrent) || isInfiniteCurrentValue(displayCurrent))
+								? Math.abs(displayCurrent)
+								: 1;
+							directionCurrent = signFromBottomSegment >= 0 ? mag : -mag;
+						}
+					}
+					const dir = directionCurrent < 0 ? -1 : 1;
 					const shaftStartX = midX - dir * halfLen;
 					const shaftTipX = midX + dir * halfLen;
 					const headLen = 2.67;
@@ -6884,7 +7135,7 @@ export class CircuitApp {
 						? state.wireLabelValueBySegmentIndex
 						: {};
 					const hasWireLabelCache = Object.keys(wireLabelCache).length > 0;
-					const shouldBuildNodePotentialCache = hasWireLabelCache || wireResistanceLabelsEnabled() || state.potentialGraphMode || state.voltageColorMode;
+					const shouldBuildNodePotentialCache = hasWireLabelCache || wireResistanceLabelsEnabled() || nodesIRLabelsEnabled() || state.potentialGraphMode || state.voltageColorMode;
 					if (shouldBuildNodePotentialCache) {
 					const wireLabelSegments = routeGraph && Array.isArray(routeGraph.segments)
 						? routeGraph.segments
@@ -6951,7 +7202,9 @@ export class CircuitApp {
 						labeledPieces.push({
 							kind: seg.role === "component-main"
 								? "component"
-								: (seg.role === "shoulder-wire" ? "shoulder" : "wire"),
+								: (seg.role === "shoulder-wire"
+									? "shoulder"
+									: (seg.role === "switch-blade" ? "switch" : "wire")),
 							segIndex: si,
 							componentId: seg.componentId || null,
 							componentSection: seg.componentSection || null,
@@ -6967,33 +7220,17 @@ export class CircuitApp {
 					}
 
 					for (const piece of labeledPieces) {
-						const isComponentPiece = piece.kind === "component" && !!piece.componentId;
-						let sectionR = Math.max(0, Number.isFinite(piece.length) ? piece.length * SHORT_WIRE_R_PER_PIXEL : 0);
-						let sectionEmf = 0;
-						if (isComponentPiece) {
-							const cid = piece.componentId;
-							if (isExtraCell(cid)) {
-								sectionR = piece.componentSection === "internal-resistor"
-									? componentIntrinsicResistance(cid)
-									: 0;
-							} else if (isBranchSwitch(cid)) {
-								sectionR = componentIntrinsicResistance(cid);
-							} else {
-								sectionR = resistorValue(cid);
-							}
-							sectionEmf = Number.isFinite(componentEmf(cid)) ? componentEmf(cid) : 0;
-						}
 						const cached = wireLabelCache[piece.segIndex] || null;
-						if (cached && Number.isFinite(cached.R)) sectionR = Math.max(0, cached.R);
-						const sectionPd = piece.v2 - piece.v1;
-						let signedDelta = Number.isFinite(sectionPd)
-							? sectionPd
-							: (Number.isFinite(cached && cached.signedPdValue) ? cached.signedPdValue : NaN);
+						// Keep node-pair rows in lockstep with displayed wire labels.
+						// If a segment has no cached wire-label values, do not recompute them here.
+						if (!cached) continue;
+						const isComponentPiece = piece.kind === "component" && !!piece.componentId;
+						const sectionR = Number.isFinite(cached.R) ? Math.max(0, cached.R) : 0;
 						const aKey = nodeKeyFor(piece.x1, piece.y1);
 						const bKey = nodeKeyFor(piece.x2, piece.y2);
-						const wireIraw = (cached && (Number.isFinite(cached.displayCurrent) || isInfiniteCurrentValue(cached.displayCurrent)))
+						const wireIraw = (Number.isFinite(cached.displayCurrent) || isInfiniteCurrentValue(cached.displayCurrent))
 							? cached.displayCurrent
-							: currentForSegment(piece.segIndex);
+							: NaN;
 						const wireI = (Number.isFinite(wireIraw) || isInfiniteCurrentValue(wireIraw)) ? wireIraw : NaN;
 						const isCellEmfPiece = !!(isComponentPiece
 							&& isExtraCell(piece.componentId)
@@ -7001,6 +7238,7 @@ export class CircuitApp {
 						let fromKey = null;
 						let toKey = null;
 						if (isCellEmfPiece) {
+							// Cell EMF sign is defined by cell polarity and geometry, not by inferred loop current direction.
 							const canonicalOrder = canonicalNodeOrderForPiece(piece, aKey, bKey);
 							fromKey = canonicalOrder.fromKey;
 							toKey = canonicalOrder.toKey;
@@ -7017,23 +7255,23 @@ export class CircuitApp {
 							fromKey = canonicalOrder.fromKey;
 							toKey = canonicalOrder.toKey;
 						}
-						const cellTraversalSign = (fromKey === aKey && toKey === bKey) ? 1 : -1;
-						const cellGeometrySignAtoB = Math.abs(piece.y2 - piece.y1) >= Math.abs(piece.x2 - piece.x1)
-							? (piece.y2 >= piece.y1 ? 1 : -1)
-							: (piece.x2 >= piece.x1 ? 1 : -1);
-						const cellRiseSignAtoB = isCellEmfPiece
-							? (getCellPolarity(piece.componentId) * cellGeometrySignAtoB)
+						const switchDirectedByRow = piece.kind === "switch"
+							&& Number.isFinite(cached.signedPdValue)
+							? directedVoltageForPiece(fromKey, toKey, aKey, bKey, cached.signedPdValue)
 							: NaN;
-						const directedCellEmf = isCellEmfPiece && Number.isFinite(sectionEmf)
-							? (Math.abs(sectionEmf) * cellTraversalSign * cellRiseSignAtoB)
+						const emfDirectedByRow = isCellEmfPiece
+							&& Number.isFinite(cached.signedPdValue)
+							? directedVoltageForPiece(fromKey, toKey, aKey, bKey, cached.signedPdValue)
 							: NaN;
-						const directedPdPlusEmf = (cached && Number.isFinite(cached.directedPdDisplay) && !isCellEmfPiece)
-							? cached.directedPdDisplay
-							: (isCellEmfPiece
-								? directedCellEmf
-								: (Number.isFinite(wireI)
-									? (-Math.abs(wireI) * sectionR)
-									: directedVoltageForPiece(fromKey, toKey, aKey, bKey, signedDelta)));
+						const directedPdPlusEmf = Number.isFinite(emfDirectedByRow)
+							? emfDirectedByRow
+							: (Number.isFinite(switchDirectedByRow)
+							? switchDirectedByRow
+							: (Number.isFinite(cached.directedPdDisplay)
+								? cached.directedPdDisplay
+								: (Number.isFinite(cached.signedPdValue)
+									? directedVoltageForPiece(fromKey, toKey, aKey, bKey, cached.signedPdValue)
+									: NaN)));
 						const rowRouteIndex = Number.isFinite(piece.segIndex) ? routeIndexBySegmentIndex[piece.segIndex] : null;
 						const rowRouteKey = Number.isFinite(piece.segIndex) ? routeKeyBySegmentIndex[piece.segIndex] : null;
 						let rowColor = "#14354f";
@@ -7060,6 +7298,9 @@ export class CircuitApp {
 						fromKey: row.fromKey,
 						toKey: row.toKey,
 						pdPlusEmf: row.pdPlusEmf,
+						R: row.R,
+						current: row.current,
+						rowColor: row.rowColor,
 						kind: row.kind,
 						componentId: row.componentId || null
 					}));
@@ -7196,22 +7437,63 @@ export class CircuitApp {
 							}
 						}
 					}
+
+					const nodeInfoById = new Map();
+					for (const node of nodesOrdered) {
+						if (!node || !node.key) continue;
+						const nodeId = nodeIdByKey.get(node.key);
+						if (!nodeId) continue;
+						nodeInfoById.set(nodeId, node);
+					}
+
+					const disconnectedComponents = [];
+					const seenComponentNodes = new Set();
+					for (const startId of nodeIds) {
+						if (!startId || seenComponentNodes.has(startId)) continue;
+						const component = [];
+						const stack = [startId];
+						seenComponentNodes.add(startId);
+						while (stack.length) {
+							const cur = stack.pop();
+							component.push(cur);
+							const neighbors = nodeConnectionMap.get(cur) || [];
+							for (const n of neighbors) {
+								if (!n || seenComponentNodes.has(n)) continue;
+								seenComponentNodes.add(n);
+								stack.push(n);
+							}
+						}
+						if (component.length && !component.some((id) => anchorConnected.has(id))) {
+							disconnectedComponents.push(component);
+						}
+					}
+
+					for (const component of disconnectedComponents) {
+						let sampledAnchor = null;
+						for (const nodeId of component) {
+							const node = nodeInfoById.get(nodeId);
+							if (!node || !potentialSampler || typeof potentialSampler.potentialAt !== "function") continue;
+							const sampledPotential = potentialSampler.potentialAt(node.x, node.y);
+							const existingPotential = nodePotentialById.get(nodeId);
+							if (!Number.isFinite(sampledPotential) || !Number.isFinite(existingPotential)) continue;
+							sampledAnchor = { sampledPotential, existingPotential };
+							break;
+						}
+						if (!sampledAnchor) continue;
+						const offset = sampledAnchor.sampledPotential - sampledAnchor.existingPotential;
+						if (!Number.isFinite(offset) || Math.abs(offset) <= 1e-12) continue;
+						for (const nodeId of component) {
+							const existingPotential = nodePotentialById.get(nodeId);
+							if (!Number.isFinite(existingPotential)) continue;
+							nodePotentialById.set(nodeId, existingPotential + offset);
+						}
+					}
 					const nodePotentialByKey = {};
 					for (const node of nodesOrdered) {
 						if (!node || !node.key) continue;
 						const nodeId = nodeIdByKey.get(node.key);
 						if (!nodeId) continue;
 						let potential = nodePotentialById.get(nodeId);
-						const isDisconnectedFromAnchor = anchorNodeId && !anchorConnected.has(nodeId);
-						const sampledPotential = isDisconnectedFromAnchor
-							&& potentialSampler
-							&& typeof potentialSampler.potentialAt === "function"
-							? potentialSampler.potentialAt(node.x, node.y)
-							: null;
-						if (isDisconnectedFromAnchor && Number.isFinite(sampledPotential)) {
-							potential = sampledPotential;
-							nodePotentialById.set(nodeId, potential);
-						}
 						if (!Number.isFinite(potential)) continue;
 						nodePotentialByKey[node.key] = potential;
 					}
@@ -7438,6 +7720,7 @@ export class CircuitApp {
 				sceneRenderer.drawJunctionIds(layout);
 				sceneRenderer.drawNodePotentials(layout);
 				drawQueuedWireResistanceLabels(layout);
+				drawNodesIRLabelsOverlay(layout);
 				sceneRenderer.drawJunctionDebugTable(layout);
 				if (state.potentialGraphMode) {
 					sceneRenderer.drawPotentialGraph(layout);
@@ -8191,6 +8474,12 @@ export class CircuitApp {
 					wireResLabelsCheck.addEventListener("input", () => {
 						state.wireResistanceLabels = wireResLabelsCheck.checked;
 					});
+
+					if (nodesIRLabelsCheck) {
+						nodesIRLabelsCheck.addEventListener("input", () => {
+							state.nodesIRLabels = nodesIRLabelsCheck.checked;
+						});
+					}
 				}
 
 				install() {
