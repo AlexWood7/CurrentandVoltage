@@ -1,5 +1,3 @@
-import { solveLinearSystem } from "./linear-system.js";
-
 export function createCircuitSolver(circuitState, onLegendUpdate, deps) {
 const {
 componentResistance,
@@ -165,6 +163,29 @@ const state = circuitState;
 					return (layout.stages || []).every((stage) => stage.branches.length === 1 && stage.branches[0].items.length <= 1);
 				}
 
+				primaryCellGeometry(layout) {
+					const leftSeriesPathHeight = this.state.leftSeries.reduce((sum, id) => sum + componentBodyHeight(id) + CONNECTOR_WIRE * 2, 0);
+					const totalLeftCellHeight = this.state.internalR
+						? (RES_H + EMF_BODY_HEIGHT + CONNECTOR_WIRE * 4 + CELL_PADDING)
+						: (EMF_BODY_HEIGHT + CONNECTOR_WIRE * 2);
+					const totalLeftComponentHeight = totalLeftCellHeight + leftSeriesPathHeight;
+					const leftExtra = Math.max(0, (layout.yBottom - layout.yTop) - (totalLeftComponentHeight + END_BUS_CONNECTOR * 2));
+					const topEndLead = END_BUS_CONNECTOR + leftExtra * 0.5;
+					const componentStartY = Number.isFinite(layout.leftCellStartY) ? layout.leftCellStartY : (layout.yTop + topEndLead + leftSeriesPathHeight);
+					const irTop = componentStartY + CONNECTOR_WIRE;
+					const irBottom = irTop + RES_H;
+					const emfTop = this.state.internalR ? (irBottom + CONNECTOR_WIRE * 2) : (componentStartY + CONNECTOR_WIRE);
+					const emfBottom = emfTop + EMF_BODY_HEIGHT;
+					const secondBottomPlateY = emfBottom;
+					return {
+						componentStartY,
+						topPlateY: emfTop,
+						bottomPlateY: secondBottomPlateY,
+						emfConnectorBottomY: emfBottom + CONNECTOR_WIRE,
+						emfPaddingBottomY: emfBottom + CONNECTOR_WIRE + (this.state.internalR ? CELL_PADDING : 0)
+					};
+				}
+
 				primaryCellPlateVoltages(byId, fallbackTopV, fallbackBottomV) {
 					const primaryLeftCellId = (this.state.leftSeries || []).find((id) => isExtraCell(id)) || PRIMARY_CELL_ID;
 					const sol = byId && byId[primaryLeftCellId];
@@ -316,6 +337,23 @@ const state = circuitState;
 						vMin: 0,
 						vMax: 1e-6
 					};
+				}
+
+				getIdealShortSwitchSectionIds() {
+					const EPS_R = 1e-9;
+					const EPS_V = 1e-6;
+					const ids = new Set();
+					for (const stage of this.state.stages || []) {
+						for (const branch of (stage && stage.branches) || []) {
+							const model = this.branchModelIntrinsic(branch || []);
+							const isIdealShortBranch = model.R <= EPS_R && Math.abs(model.E) <= EPS_V;
+							if (!isIdealShortBranch) continue;
+							for (const id of branch || []) {
+								if (isBranchSwitch(id) && isComponentSwitchClosed(id)) ids.add(id);
+							}
+						}
+					}
+					return ids;
 				}
 
 				estimateMainSwitchWireResistance() {
@@ -531,6 +569,60 @@ const state = circuitState;
 					};
 				}
 
+				buildOpenSwitchSolution() {
+					const byId = {};
+					let hasInfiniteCurrent = false;
+					const leftRunV = this.writeBranchReadings(byId, this.state.leftSeries, 0, 0);
+
+					const stageEquivalents = this.state.stages.map((stage) => this.stageEquivalent(stage));
+					const openCircuitDrops = [];
+					let rightOpenDrop = 0;
+					for (const stageEq of stageEquivalents) {
+						const Vstage = -stageEq.Eeq;
+						openCircuitDrops.push(Vstage);
+						rightOpenDrop += Vstage;
+					}
+
+					const switchVRight = leftRunV - rightOpenDrop;
+					const stageNodeV = [switchVRight];
+					let runV = switchVRight;
+
+					for (let stageIndex = 0; stageIndex < this.state.stages.length; stageIndex++) {
+						const stage = this.state.stages[stageIndex];
+						const stageEq = stageEquivalents[stageIndex];
+						const Vstage = openCircuitDrops[stageIndex];
+						const stageTopV = runV;
+						const stageBottomV = stageTopV + Vstage;
+						const stageSolved = this.solveStageBranchCurrents(stage, stageEq, Vstage, 0);
+						if (stageSolved.hasInfiniteCurrent) hasInfiniteCurrent = true;
+						for (let branchIndex = 0; branchIndex < stage.branches.length; branchIndex++) {
+							const branch = stage.branches[branchIndex];
+							const Ibranch = stageSolved.branchCurrents[branchIndex];
+							this.writeBranchReadings(byId, branch, Ibranch, stageTopV);
+						}
+						runV = stageBottomV;
+						stageNodeV.push(runV);
+					}
+
+					const { vMin, vMax } = this.computeVoltageBounds([0, leftRunV, switchVRight, runV], byId);
+					const { cellTopPlateV, cellBottomPlateV } = this.primaryCellPlateVoltages(byId, 0, leftRunV);
+
+					return {
+						byId,
+						Itotal: 0,
+						hasInfiniteCurrent,
+						stageNodeV,
+						Vext: leftRunV,
+						switchVLeft: leftRunV,
+						switchVRight,
+						bottomRightV: runV,
+						cellTopPlateV,
+						cellBottomPlateV,
+						vMin,
+						vMax
+					};
+				}
+
 				buildZeroResistanceSolution(netEmf) {
 					const layout = this.getSolveLayout();
 					if (!this.isSimpleSeriesLayout(layout) || this.state.internalR) {
@@ -663,6 +755,54 @@ const state = circuitState;
 					return Math.max(1e-6, leftVerticalLen * SHORT_WIRE_R_PER_PIXEL);
 				}
 
+				solveLinearSystem(matrix, rhs) {
+					const n = matrix.length;
+					if (!Number.isFinite(n) || n <= 0 || rhs.length !== n) return null;
+					const A = matrix.map((row) => row.slice());
+					const b = rhs.slice();
+					const EPS = 1e-12;
+					for (let col = 0; col < n; col++) {
+						let pivotRow = col;
+						let best = Math.abs(A[col][col]);
+						for (let row = col + 1; row < n; row++) {
+							const candidate = Math.abs(A[row][col]);
+							if (candidate > best) {
+								best = candidate;
+								pivotRow = row;
+							}
+						}
+						if (best <= EPS) return null;
+						if (pivotRow !== col) {
+							const tmpRow = A[col];
+							A[col] = A[pivotRow];
+							A[pivotRow] = tmpRow;
+							const tmpB = b[col];
+							b[col] = b[pivotRow];
+							b[pivotRow] = tmpB;
+						}
+						const pivot = A[col][col];
+						for (let row = col + 1; row < n; row++) {
+							const factor = A[row][col] / pivot;
+							if (Math.abs(factor) <= EPS) continue;
+							for (let k = col; k < n; k++) {
+								A[row][k] -= factor * A[col][k];
+							}
+							b[row] -= factor * b[col];
+						}
+					}
+					const x = new Array(n).fill(0);
+					for (let row = n - 1; row >= 0; row--) {
+						let sum = b[row];
+						for (let col = row + 1; col < n; col++) {
+							sum -= A[row][col] * x[col];
+						}
+						const pivot = A[row][row];
+						if (Math.abs(pivot) <= EPS) return null;
+						x[row] = sum / pivot;
+					}
+					return x;
+				}
+
 				solveWithKirchhoffMatrix(includeWireR = true) {
 					const stageCount = this.state.stages.length;
 					const EPS_R = 1e-9;
@@ -768,7 +908,7 @@ const state = circuitState;
 						rhs[row] = -element.E;
 					}
 
-					const solutionVec = solveLinearSystem(matrix, rhs);
+					const solutionVec = this.solveLinearSystem(matrix, rhs);
 					if (!solutionVec) return null;
 
 					const nodeV = { A: 0 };

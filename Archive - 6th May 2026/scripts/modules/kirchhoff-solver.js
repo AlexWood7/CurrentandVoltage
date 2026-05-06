@@ -1,5 +1,3 @@
-import { solveLinearSystem } from "./linear-system.js";
-
 export function createKirchhoffSolver(deps) {
 	const {
 		state,
@@ -225,11 +223,23 @@ export function createKirchhoffSolver(deps) {
 				if (fi >= 0) bVec[fi] -= G * E;
 				if (ti >= 0) bVec[ti] += G * E;
 			}
-			const solvedNodeV = solveLinearSystem(YMat, bVec);
-			if (!Array.isArray(solvedNodeV) || solvedNodeV.length !== N) return null;
+			const aug = YMat.map((row, i) => [...row, bVec[i]]);
+			for (let col = 0; col < N; col++) {
+				let maxRow = col;
+				for (let r = col + 1; r < N; r++) {
+					if (Math.abs(aug[r][col]) > Math.abs(aug[maxRow][col])) maxRow = r;
+				}
+				[aug[col], aug[maxRow]] = [aug[maxRow], aug[col]];
+				if (Math.abs(aug[col][col]) < 1e-15) continue;
+				for (let r = 0; r < N; r++) {
+					if (r === col) continue;
+					const f = aug[r][col] / aug[col][col];
+					for (let c = col; c <= N; c++) aug[r][c] -= f * aug[col][c];
+				}
+			}
 			const nodeV = new Map([[groundNode, 0]]);
 			for (let i = 0; i < N; i++) {
-				nodeV.set(nodeList[i], Number.isFinite(solvedNodeV[i]) ? solvedNodeV[i] : 0);
+				nodeV.set(nodeList[i], Math.abs(aug[i][i]) > 1e-15 ? aug[i][N] / aug[i][i] : 0);
 			}
 			const branchResults = rows.map((r) => {
 				const Vf = nodeV.has(r.from) ? nodeV.get(r.from) : 0;

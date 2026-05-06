@@ -4,7 +4,6 @@ import { createInitialState } from "./modules/state.js";
 import { CircuitLayoutEngine } from "./modules/layout.js";
 import { createCircuitSolver } from "./modules/solver.js";
 import { createKirchhoffSolver } from "./modules/kirchhoff-solver.js";
-import { solveLinearSystem } from "./modules/linear-system.js";
 
 export class CircuitApp {
 			constructor() {
@@ -407,14 +406,16 @@ export class CircuitApp {
 				if (isExtraCell(id)) return state.internalR ? getCellRInternal(id) : 0;
 				if (isCircuitSwitch(id)) {
 					if (!isComponentSwitchClosed(id)) return SWITCH_OPEN_RESISTANCE;
-					return closedSwitchWireResistance(id);
+					return state.useShortSwitchWireResistance
+						? closedSwitchWireResistance(id)
+						: 0;
 				}
 				return resistorValue(id);
 			}
 
 			function componentIntrinsicResistance(id) {
 				if (isExtraCell(id)) return state.internalR ? getCellRInternal(id) : 0;
-				if (isCircuitSwitch(id)) return isComponentSwitchClosed(id) ? closedSwitchWireResistance(id) : SWITCH_OPEN_RESISTANCE;
+				if (isCircuitSwitch(id)) return isComponentSwitchClosed(id) ? 0 : SWITCH_OPEN_RESISTANCE;
 				return resistorValue(id);
 			}
 
@@ -2013,6 +2014,7 @@ export class CircuitApp {
 				const pointKey = (x, y) => `${x.toFixed(3)}|${y.toFixed(3)}`;
 				const baseResistanceByIndex = new Array(segments.length).fill(0);
 				const labelEligibleByIndex = new Array(segments.length).fill(false);
+				const tinyResistanceCarryByIndex = new Array(segments.length).fill(0);
 				const segmentEndpointKeys = new Array(segments.length).fill(null);
 				const segmentsByPointKey = new Map();
 				for (let si = 0; si < segments.length; si++) {
@@ -2055,6 +2057,30 @@ export class CircuitApp {
 					segmentsByPointKey.get(k1).push(si);
 					segmentsByPointKey.get(k2).push(si);
 				}
+				for (let si = 0; si < segments.length; si++) {
+					if (labelEligibleByIndex[si]) continue;
+					const tinyR = baseResistanceByIndex[si];
+					if (!(tinyR > 0)) continue;
+					const endpoints = segmentEndpointKeys[si];
+					if (!endpoints) continue;
+					const candidateSet = new Set([
+						...(segmentsByPointKey.get(endpoints.k1) || []),
+						...(segmentsByPointKey.get(endpoints.k2) || [])
+					]);
+					candidateSet.delete(si);
+					const candidates = Array.from(candidateSet).filter((idx) => labelEligibleByIndex[idx]);
+					if (!candidates.length) continue;
+					let targetIndex = candidates[0];
+					let bestR = baseResistanceByIndex[targetIndex] || 0;
+					for (const idx of candidates) {
+						const r = baseResistanceByIndex[idx] || 0;
+						if (r > bestR) {
+							bestR = r;
+							targetIndex = idx;
+						}
+					}
+					tinyResistanceCarryByIndex[targetIndex] += tinyR;
+				}
 				const showWireLabels = wireResistanceLabelsEnabled();
 				if (showWireLabels) {
 					ctx.save();
@@ -2079,6 +2105,7 @@ export class CircuitApp {
 						: rawLen;
 					const isComponentSegment = seg && seg.role === "component-main" && !!seg.componentId;
 					let segmentR = Math.max(0, Number.isFinite(baseResistanceByIndex[si]) ? baseResistanceByIndex[si] : 0);
+					segmentR += Math.max(0, Number.isFinite(tinyResistanceCarryByIndex[si]) ? tinyResistanceCarryByIndex[si] : 0);
 					const label = rawLen < 32
 						? formatCompactWireResistance(segmentR)
 						: formatWireResistance(segmentR);
@@ -3822,6 +3849,53 @@ export class CircuitApp {
 				};
 				const nodePotentialByKey = new Map();
 				const nodeSourceByKey = new Map();
+
+				const solveLinearSystem = (matrix, rhs) => {
+					const n = matrix.length;
+					if (!(n > 0) || rhs.length !== n) return null;
+					const A = matrix.map((row) => row.slice());
+					const b = rhs.slice();
+					const EPS = 1e-12;
+					for (let col = 0; col < n; col++) {
+						let pivot = col;
+						let best = Math.abs(A[col][col]);
+						for (let r = col + 1; r < n; r++) {
+							const cand = Math.abs(A[r][col]);
+							if (cand > best) {
+								best = cand;
+								pivot = r;
+							}
+						}
+						if (best <= EPS) return null;
+						if (pivot !== col) {
+							const rowTmp = A[col];
+							A[col] = A[pivot];
+							A[pivot] = rowTmp;
+							const bTmp = b[col];
+							b[col] = b[pivot];
+							b[pivot] = bTmp;
+						}
+						const diag = A[col][col];
+						for (let r = col + 1; r < n; r++) {
+							const f = A[r][col] / diag;
+							if (Math.abs(f) <= EPS) continue;
+							for (let c = col; c < n; c++) {
+								A[r][c] -= f * A[col][c];
+							}
+							b[r] -= f * b[col];
+						}
+					}
+					const x = new Array(n).fill(0);
+					for (let r = n - 1; r >= 0; r--) {
+						let sum = b[r];
+						for (let c = r + 1; c < n; c++) {
+							sum -= A[r][c] * x[c];
+						}
+						if (Math.abs(A[r][r]) <= EPS) return null;
+						x[r] = sum / A[r][r];
+					}
+					return x;
+				};
 
 				if (routeGraph && Array.isArray(routeGraph.edges) && routeGraph.nodeByKey) {
 					const nodeKeys = Array.from(routeGraph.nodeByKey.keys());
@@ -7267,29 +7341,44 @@ export class CircuitApp {
 					}
 
 					const solveNodePotentials = () => {
-						const nodeIds = Array.from(nodeConnectionMap.keys())
-							.filter((id) => !!id && id !== "?")
-							.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+						const nodeIds = Array.from(nodeConnectionMap.keys()).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
 						if (nodeIds.length === 0) return new Map();
 						if (nodeIds.length === 1) {
 							const only = nodeIds[0];
 							return new Map([[only, 0]]);
 						}
 
+						const out = new Map();
+						const anchor = nodeIds.includes("N1") ? "N1" : nodeIds[0];
+						out.set(anchor, 0);
+
 						const usableRows = nodePairRows
 							.map((row) => {
 								const fromId = nodeIdByKey.get(row.fromKey);
 								const toId = nodeIdByKey.get(row.toKey);
 								const d = Number.isFinite(row.pdPlusEmf) ? row.pdPlusEmf : NaN;
-								if (!fromId || !toId || fromId === "?" || toId === "?" || !Number.isFinite(d)) return null;
+								if (!fromId || !toId || !Number.isFinite(d)) return null;
 								return { fromId, toId, d };
 							})
 							.filter(Boolean);
 
-						const out = new Map();
-						const globalAnchor = nodeIds.includes("N1") ? "N1" : nodeIds[0];
+						const maxPasses = Math.max(2, usableRows.length * 3);
+						for (let pass = 0; pass < maxPasses; pass++) {
+							let changed = false;
+							for (const step of usableRows) {
+								const hasFrom = out.has(step.fromId);
+								const hasTo = out.has(step.toId);
+								if (hasFrom && !hasTo) {
+									out.set(step.toId, out.get(step.fromId) + step.d);
+									changed = true;
+								} else if (!hasFrom && hasTo) {
+									out.set(step.fromId, out.get(step.toId) - step.d);
+									changed = true;
+								}
+							}
+							if (!changed) break;
+						}
 
-						const components = [];
 						const seen = new Set();
 						for (const start of nodeIds) {
 							if (seen.has(start)) continue;
@@ -7301,86 +7390,33 @@ export class CircuitApp {
 								comp.push(cur);
 								const neighbors = nodeConnectionMap.get(cur) || [];
 								for (const n of neighbors) {
-									if (!n || n === "?" || seen.has(n)) continue;
+									if (seen.has(n)) continue;
 									seen.add(n);
 									stack.push(n);
 								}
 							}
-							if (comp.length) components.push(comp);
-						}
-
-						const solveByPropagationFallback = (comp, compRows, anchor) => {
+							if (!comp.some((id) => out.has(id))) out.set(comp[0], 0);
 							const compSet = new Set(comp);
-							const fallback = new Map([[anchor, 0]]);
-							const maxPasses = Math.max(2, compRows.length * 3);
 							for (let pass = 0; pass < maxPasses; pass++) {
 								let changed = false;
-								for (const step of compRows) {
+								for (const step of usableRows) {
 									if (!compSet.has(step.fromId) || !compSet.has(step.toId)) continue;
-									const hasFrom = fallback.has(step.fromId);
-									const hasTo = fallback.has(step.toId);
+									const hasFrom = out.has(step.fromId);
+									const hasTo = out.has(step.toId);
 									if (hasFrom && !hasTo) {
-										fallback.set(step.toId, fallback.get(step.fromId) + step.d);
+										out.set(step.toId, out.get(step.fromId) + step.d);
 										changed = true;
 									} else if (!hasFrom && hasTo) {
-										fallback.set(step.fromId, fallback.get(step.toId) - step.d);
+										out.set(step.fromId, out.get(step.toId) - step.d);
 										changed = true;
 									}
 								}
 								if (!changed) break;
 							}
 							for (const id of comp) {
-								if (!fallback.has(id)) fallback.set(id, 0);
-							}
-							return fallback;
-						};
-
-						for (const comp of components) {
-							const compSet = new Set(comp);
-							const anchor = compSet.has(globalAnchor) ? globalAnchor : comp[0];
-							out.set(anchor, 0);
-							const compRows = usableRows.filter((r) => compSet.has(r.fromId) && compSet.has(r.toId));
-							const unknownIds = comp.filter((id) => id !== anchor);
-							if (unknownIds.length === 0) continue;
-
-							const idx = new Map();
-							for (let i = 0; i < unknownIds.length; i++) idx.set(unknownIds[i], i);
-							const A = Array.from({ length: unknownIds.length }, () => new Array(unknownIds.length).fill(0));
-							const b = new Array(unknownIds.length).fill(0);
-
-							for (const row of compRows) {
-								const coeff = [];
-								if (row.fromId !== anchor && idx.has(row.fromId)) coeff.push([idx.get(row.fromId), -1]);
-								if (row.toId !== anchor && idx.has(row.toId)) coeff.push([idx.get(row.toId), +1]);
-								if (coeff.length === 0) continue;
-								for (let i = 0; i < coeff.length; i++) {
-									const [ri, ci] = coeff[i];
-									b[ri] += ci * row.d;
-									for (let j = 0; j < coeff.length; j++) {
-										const [rj, cj] = coeff[j];
-										A[ri][rj] += ci * cj;
-									}
-								}
-							}
-
-							for (let i = 0; i < unknownIds.length; i++) A[i][i] += 1e-12;
-							const solved = solveLinearSystem(A, b);
-							if (Array.isArray(solved) && solved.length === unknownIds.length) {
-								for (let i = 0; i < unknownIds.length; i++) {
-									const v = Number.isFinite(solved[i]) ? solved[i] : 0;
-									out.set(unknownIds[i], v);
-								}
-							} else {
-								const fallback = solveByPropagationFallback(comp, compRows, anchor);
-								for (const id of comp) {
-									out.set(id, Number.isFinite(fallback.get(id)) ? fallback.get(id) : 0);
-								}
-							}
-							for (const id of comp) {
 								if (!out.has(id)) out.set(id, 0);
 							}
 						}
-
 						return out;
 					};
 
