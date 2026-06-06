@@ -48,6 +48,18 @@ const state = circuitState;
 								byId[id] = { I: 0, V, R, Vtop: emf, Vbottom: emf + V };
 							}
 						}
+						// Include potentiometer parallel components in zero readings
+						if (stage.potentiometerParallels && Array.isArray(stage.potentiometerParallels)) {
+							for (const section of stage.potentiometerParallels) {
+								if (section.components && Array.isArray(section.components)) {
+									for (const id of section.components) {
+										const R = componentResistance(id);
+										const V = 0 * R - componentEmf(id);
+										byId[id] = { I: 0, V, R, Vtop: emf, Vbottom: emf + V };
+									}
+								}
+							}
+						}
 					}
 					return byId;
 				}
@@ -1007,6 +1019,8 @@ const state = circuitState;
 						this.state.solved = solved;
 						this.state.solved.wireResistanceDiagnostic = this.buildWireResistanceDiagnostic(this.state.solved);
 						this.onLegendUpdate();
+						// Post-process potentiometer parallel components
+						this.calculatePotentiometerParallelVoltages();
 						return;
 					}
 
@@ -1020,6 +1034,63 @@ const state = circuitState;
 						this.state.solved = this.finalizeSolvedSolution(fallbackSolved || this.buildSingularMatrixDiagnosticSolution());
 					this.state.solved.wireResistanceDiagnostic = this.buildWireResistanceDiagnostic(this.state.solved);
 					this.onLegendUpdate();
+					// Post-process potentiometer parallel components
+					this.calculatePotentiometerParallelVoltages();
+				}
+
+				calculatePotentiometerParallelVoltages() {
+					// Post-process potentiometer parallel components to estimate their voltages
+					// based on the potentiometer's voltage distribution
+					if (!this.state.solved || !this.state.solved.byId) return;
+					if (!Array.isArray(this.state.stages)) return;
+
+					// Get potentiometer voltages (P1 should be in a stage somewhere)
+					const potReadings = this.state.solved.byId["P1"];
+					if (!potReadings || !Number.isFinite(potReadings.Vtop) || !Number.isFinite(potReadings.Vbottom)) return;
+
+					const potTopV = potReadings.Vtop;
+					const potBottomV = potReadings.Vbottom;
+					
+					// For each stage, process potentiometer parallel components
+					for (const stage of this.state.stages) {
+						if (!stage.potentiometerParallels || !Array.isArray(stage.potentiometerParallels)) continue;
+
+						for (const section of stage.potentiometerParallels) {
+							if (!section.components || !Array.isArray(section.components)) continue;
+
+							// Determine voltage range for this section
+							let sectionTopV = potTopV;
+							let sectionBottomV = potBottomV;
+
+							if (section.section === "upper") {
+								// Upper section: from top lead to tap (approximate tap at middle)
+								sectionBottomV = (potTopV + potBottomV) * 0.5;
+							} else if (section.section === "lower") {
+								// Lower section: from tap to bottom lead
+								sectionTopV = (potTopV + potBottomV) * 0.5;
+							} else if (section.section === "whole") {
+								// Whole: entire potentiometer range
+								// Use top to bottom as is
+							}
+
+							// Assign voltage to parallel components
+							for (const compId of section.components) {
+								if (!this.state.solved.byId[compId]) continue;
+
+								const R = componentResistance(compId);
+								const Vdrop = 0 - componentEmf(compId);
+								const I = Number.isFinite(R) && R > 1e-9 ? (sectionTopV - sectionBottomV) / R : 0;
+
+								this.state.solved.byId[compId] = {
+									I: I,
+									V: Vdrop,
+									R: R,
+									Vtop: sectionTopV,
+									Vbottom: sectionBottomV
+								};
+							}
+						}
+					}
 				}
 			}
 

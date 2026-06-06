@@ -3,7 +3,10 @@ export const resistorDefs = [
 	{ id: "R1", value: 2.5 },
 	{ id: "R2", value: 5.0 },
 	{ id: "R3", value: 7.5 },
-	{ id: "R4", value: 10.0 }
+	{ id: "R4", value: 10.0 },
+	{ id: "R5a", value: 5.0 },
+	{ id: "R5b", value: 5.0 },
+	{ id: "P1", value: 5.0 }
 ];
 
 // Available EMF cells (batteries) - up to 4 cells can be added to the circuit

@@ -21,18 +21,35 @@ export class CircuitApp {
 			const componentMenuToggle = document.getElementById("componentMenuToggle");
 			const componentMenu = document.getElementById("componentMenu");
 			const componentMenuClose = document.getElementById("componentMenuClose");
+			const saveConfigBtn = document.getElementById("saveConfigBtn");
+			const loadConfigBtn = document.getElementById("loadConfigBtn");
+			const loadConfigInput = document.getElementById("loadConfigInput");
+			const presetSelect = document.getElementById("presetSelect");
+			const playPauseBtn = document.getElementById("playPauseBtn");
+			const resetBtn = document.getElementById("resetBtn");
 
 			const resistorDefs = [
 				{ id: "R1", value: 2.5 },
 				{ id: "R2", value: 5.0 },
 				{ id: "R3", value: 7.5 },
-				{ id: "R4", value: 10.0 }
+				{ id: "R4", value: 10.0 },
+				{ id: "R5a", value: 5.0 },
+				{ id: "R5b", value: 5.0 },
+				{ id: "P1", value: 3.0 }
 			];
 
-			const ui = Object.fromEntries(resistorDefs.map((r) => [r.id, document.getElementById(r.id)]));
+			function resistorToggleElementId(id) {
+				return id === "R5a" || id === "R5b" ? "R5" : id;
+			}
+
+			function resistorToggleGroupIds(id) {
+				return id === "R5a" || id === "R5b" ? ["R5a", "R5b"] : [id];
+			}
+
+			const ui = Object.fromEntries(resistorDefs.map((r) => [r.id, document.getElementById(resistorToggleElementId(r.id))]));
 			const intRCheck   = document.getElementById("intR");
 			const EXTRA_CELL_IDS = ["Cell1", "Cell2", "Cell3", "Cell4"];
-			const EXTRA_SWITCH_IDS = ["S1", "S2", "S3", "S4"];
+			const EXTRA_SWITCH_IDS = ["S1", "S2", "S3", "S4", "S5", "S6"];
 			const cellChecks = Object.fromEntries(EXTRA_CELL_IDS.map((id) => [id, document.getElementById(id.toLowerCase())]));
 			const switchChecks = Object.fromEntries(EXTRA_SWITCH_IDS.map((id) => [id, document.getElementById(id.toLowerCase())]));
 			const voltageColorCheck = document.getElementById("voltageColor");
@@ -46,7 +63,13 @@ export class CircuitApp {
 			const wireResLabelsCheck = document.getElementById("wireResLabels");
 			const nodesIRLabelsCheck = document.getElementById("nodesIRLabels");
 			const potentialGraphChip = document.getElementById("potentialGraphChip");
+			const advancedResistorIds = ["R5", "P1"];
 			const rValueInputs = Object.fromEntries(resistorDefs.map((r) => [r.id, document.getElementById(r.id + "box")]));
+			if (rValueInputs.P1) {
+				rValueInputs.P1.min = "0.0";
+				rValueInputs.P1.max = "6.0";
+				rValueInputs.P1.step = "0.1";
+			}
 			const sliderHitAreas = [];
 			const actionHitAreas = [];
 			const wireResistanceLabelQueue = [];
@@ -119,11 +142,24 @@ export class CircuitApp {
 				cellEmfById: { Cell1: 6, Cell2: 6, Cell3: 6, Cell4: 6 },
 				cellPolarityById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
 				cellRInternalById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
-				switchClosedById: { MAIN_SWITCH: true, S1: true, S2: true, S3: true, S4: true },
+				switchClosedById: { MAIN_SWITCH: true, S1: true, S2: true, S3: true, S4: true, S5: true, S6: true },
 				useShortSwitchWireResistance: false,
-				resistorValues: { R1: 2.5, R2: 5.0, R3: 7.5, R4: 10.0 },
-				solved: { byId: {}, Itotal: 0, stageNodeV: [0], Vext: 0, switchVLeft: 0, switchVRight: 0, cellTopPlateV: 0, vMin: 0, vMax: 1 }
+				resistorValues: Object.fromEntries(resistorDefs.map((r) => [r.id, r.value])),
+				solved: { byId: {}, Itotal: 0, stageNodeV: [0], Vext: 0, switchVLeft: 0, switchVRight: 0, cellTopPlateV: 0, vMin: 0, vMax: 1 },
+				currentPreset: null,
+				lockedComponentIds: new Set()
 			};
+
+			const defaultResistorValues = Object.fromEntries(resistorDefs.map((r) => [r.id, r.value]));
+			defaultResistorValues.R5b = Number((6 - defaultResistorValues.R5a).toFixed(1));
+			state.resistorValues.R5a = defaultResistorValues.R5a;
+			state.resistorValues.R5b = defaultResistorValues.R5b;
+			const defaultCellEmf = { Cell1: 6, Cell2: 6, Cell3: 6, Cell4: 6 };
+			const defaultCellPolarity = { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 };
+			const defaultCellInternalR = { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 };
+			const defaultSwitchStates = { MAIN_SWITCH: true, S1: true, S2: true, S3: true, S4: true, S5: true, S6: true };
+			const allowedComponentIds = new Set([...resistorDefs.map((r) => r.id), ...EXTRA_CELL_IDS, ...EXTRA_SWITCH_IDS]);
+			let isPaused = false;
 
 			const RES_W = 50;
 			const RES_H = 90;
@@ -156,6 +192,11 @@ export class CircuitApp {
 			const CELL_EMF_SLIDER_KEYS = Object.fromEntries(EXTRA_CELL_IDS.map((id) => [id, id.toUpperCase() + "_EMF"]));
 			const COMPONENT_SWITCH_TOGGLE_KEYS = Object.fromEntries(EXTRA_SWITCH_IDS.map((id) => [id, id + "_TOGGLE"]));
 			const MAIN_SWITCH_ID = "MAIN_SWITCH";
+			const POTENTIOMETER_PRESET_NAME = "Potentiometer";
+			const POTENTIOMETER_SPECIAL_SWITCH_DEFAULT_BRANCHES = [
+				{ id: "S5", stageIndex: 0, branchIndex: 1 },
+				{ id: "S6", stageIndex: 1, branchIndex: 1 }
+			];
 
 			function clamp(v, min, max) {
 				return Math.max(min, Math.min(max, v));
@@ -243,7 +284,7 @@ export class CircuitApp {
 			}
 
 			function enabledIds() {
-				const ids = resistorDefs.filter((r) => ui[r.id].checked).map((r) => r.id);
+				const ids = resistorDefs.filter((r) => isResistorEnabled(r.id)).map((r) => r.id);
 				for (const id of EXTRA_CELL_IDS) {
 					if (cellChecks[id] && cellChecks[id].checked) ids.push(id);
 				}
@@ -254,11 +295,103 @@ export class CircuitApp {
 			}
 
 			function resistorValue(id) {
+				if (id === "R5a") {
+					const raw = Number.isFinite(state.resistorValues.R5a) ? state.resistorValues.R5a : defaultResistorValues.R5a;
+					return clamp(raw, 0, 6);
+				}
+				if (id === "R5b") {
+					return Number((6 - resistorValue("R5a")).toFixed(1));
+				}
 				return Number.isFinite(state.resistorValues[id]) ? state.resistorValues[id] : 2.5;
+			}
+
+			function isResistorEnabled(id) {
+				return !!(ui[id] && ui[id].checked);
+			}
+
+			function setResistorEnabled(id, enabled) {
+				if (ui[id]) ui[id].checked = !!enabled;
+			}
+
+			function collectResistorCheckboxState() {
+				return Object.fromEntries(resistorDefs.map((r) => [r.id, isResistorEnabled(r.id)]));
+			}
+
+			function applyResistorCheckboxState(valuesById) {
+				const handledToggleIds = new Set();
+				for (const resistor of resistorDefs) {
+					const toggleId = resistorToggleElementId(resistor.id);
+					if (handledToggleIds.has(toggleId)) continue;
+					handledToggleIds.add(toggleId);
+					const enabled = resistorToggleGroupIds(resistor.id).some((id) => !!valuesById[id]);
+					setResistorEnabled(resistor.id, enabled);
+				}
+			}
+
+			function isCoupledR5(id) {
+				return id === "R5a" || id === "R5b";
+			}
+
+			function isCoupledR5Controller(id) {
+				return id === "R5a";
+			}
+
+			function setCoupledR5aValue(rawValue) {
+				const value = Number(clamp(rawValue, 0, 6).toFixed(1));
+				state.resistorValues.R5a = value;
+				state.resistorValues.R5b = Number((6 - value).toFixed(1));
+			}
+
+			function coupledR5aFromStoredValues(valuesById) {
+				if (valuesById && Number.isFinite(valuesById.R5a)) {
+					return clamp(valuesById.R5a, 0, 6);
+				}
+				if (valuesById && Number.isFinite(valuesById.R5b)) {
+					return clamp(6 - valuesById.R5b, 0, 6);
+				}
+				return defaultResistorValues.R5a;
+			}
+
+			const POTENTIOMETER_TOTAL_RESISTANCE = 6;
+			const POTENTIOMETER_JUNCTION_LENGTH = CONNECTOR_WIRE;
+
+			function potentiometerTapRatio(id) {
+				if (!isPotentiometer(id)) return 0.5;
+				const raw = Number.isFinite(state.resistorValues[id]) ? state.resistorValues[id] : 0.5;
+				const normalized = raw > 1 ? (raw / POTENTIOMETER_TOTAL_RESISTANCE) : raw;
+				return clamp(normalized, 0, 1);
+			}
+
+			function potentiometerUpperResistance(id) {
+				if (!isPotentiometer(id)) return resistorValue(id);
+				const bounds = potentiometerSectionBounds(0, componentBodyHeight(id), id);
+				const usableSpan = Math.max(1e-6, (bounds.joinTop - bounds.topLeadEnd) + (bounds.bottomResEnd - bounds.joinBottom));
+				const upperLength = Math.max(0, bounds.joinTop - bounds.topLeadEnd);
+				return (upperLength / usableSpan) * POTENTIOMETER_TOTAL_RESISTANCE;
+			}
+
+			function potentiometerLowerResistance(id) {
+				if (!isPotentiometer(id)) return 0;
+				const bounds = potentiometerSectionBounds(0, componentBodyHeight(id), id);
+				const usableSpan = Math.max(1e-6, (bounds.joinTop - bounds.topLeadEnd) + (bounds.bottomResEnd - bounds.joinBottom));
+				const lowerLength = Math.max(0, bounds.bottomResEnd - bounds.joinBottom);
+				return (lowerLength / usableSpan) * POTENTIOMETER_TOTAL_RESISTANCE;
+			}
+
+			function potentiometerSectionResistance(id, section) {
+				if (!isPotentiometer(id)) return resistorValue(id);
+				if (section === "junction") return 0;
+				return section === "lower"
+					? potentiometerLowerResistance(id)
+					: potentiometerUpperResistance(id);
 			}
 
 			function isExtraCell(id) {
 				return EXTRA_CELL_IDS.includes(id);
+			}
+
+			function isPotentiometer(id) {
+				return id === "P1";
 			}
 
 			function isBranchSwitch(id) {
@@ -267,6 +400,71 @@ export class CircuitApp {
 
 			function isCircuitSwitch(id) {
 				return id === MAIN_SWITCH_ID || isBranchSwitch(id);
+			}
+
+			function isPotentiometerPresetActive() {
+				return state.currentPreset === POTENTIOMETER_PRESET_NAME;
+			}
+
+			function isPotentiometerSpecialSwitch(id) {
+				return POTENTIOMETER_SPECIAL_SWITCH_DEFAULT_BRANCHES.some((entry) => entry.id === id);
+			}
+
+			function potentiometerSpecialSwitchForR5(id) {
+				if (!isPotentiometerPresetActive()) return null;
+				if (id === "R5a") return "S5";
+				if (id === "R5b") return "S6";
+				if (id === "S5" || id === "S6") return id;
+				return null;
+			}
+
+			function potentiometerSpecialSwitchEntryById(id) {
+				return POTENTIOMETER_SPECIAL_SWITCH_DEFAULT_BRANCHES.find((entry) => entry.id === id) || null;
+			}
+
+			function updatePotentiometerSpecialSwitchControlVisibility() {
+				const hideSpecialSwitchControls = isPotentiometerPresetActive();
+				for (const entry of POTENTIOMETER_SPECIAL_SWITCH_DEFAULT_BRANCHES) {
+					const check = switchChecks[entry.id];
+					if (!check) continue;
+					check.disabled = hideSpecialSwitchControls;
+					const chip = check.closest("label.chip") || check.parentElement;
+					if (chip) chip.hidden = hideSpecialSwitchControls;
+				}
+			}
+
+			function enforcePotentiometerSpecialSwitchRules() {
+				if (!isPotentiometerPresetActive()) return;
+
+				for (const entry of POTENTIOMETER_SPECIAL_SWITCH_DEFAULT_BRANCHES) {
+					if (switchChecks[entry.id]) {
+						switchChecks[entry.id].checked = true;
+					}
+
+					while (state.stages.length <= entry.stageIndex) {
+						state.stages.push({ branches: [[]] });
+					}
+					const stage = state.stages[entry.stageIndex];
+					if (!stage.branches || !Array.isArray(stage.branches)) {
+						stage.branches = [];
+					}
+					while (stage.branches.length <= entry.branchIndex) {
+						stage.branches.push([]);
+					}
+
+					const branch = Array.isArray(stage.branches[entry.branchIndex])
+						? stage.branches[entry.branchIndex]
+						: (stage.branches[entry.branchIndex] = []);
+
+					for (let i = branch.length - 1; i >= 0; i--) {
+						if (branch[i] === entry.id) branch.splice(i, 1);
+					}
+
+					if (branch.length === 0) {
+						branch.push(entry.id);
+					}
+					setComponentSwitchClosed(entry.id, false);
+				}
 			}
 
 			function getCellEmf(id) {
@@ -278,6 +476,10 @@ export class CircuitApp {
 				state.debugMode = !!enabled;
 				if (debugControlsGroup) {
 					debugControlsGroup.hidden = !enabled;
+				}
+				for (const id of advancedResistorIds) {
+					const control = document.getElementById(id);
+					if (control) control.hidden = !enabled;
 				}
 				if (enabled) return;
 				if (debugLabelsCheck) debugLabelsCheck.checked = false;
@@ -327,12 +529,17 @@ export class CircuitApp {
 
 			function isComponentSwitchClosed(id) {
 				if (!isCircuitSwitch(id)) return true;
+				if (isPotentiometerSpecialSwitch(id)) return false;
 				const v = state.switchClosedById[id];
 				return v !== false;
 			}
 
 			function setComponentSwitchClosed(id, closed) {
 				if (!isCircuitSwitch(id)) return;
+				if (isPotentiometerSpecialSwitch(id)) {
+					state.switchClosedById[id] = false;
+					return;
+				}
 				state.switchClosedById[id] = closed !== false;
 			}
 
@@ -409,12 +616,14 @@ export class CircuitApp {
 					if (!isComponentSwitchClosed(id)) return SWITCH_OPEN_RESISTANCE;
 					return closedSwitchWireResistance(id);
 				}
+				if (isPotentiometer(id)) return POTENTIOMETER_TOTAL_RESISTANCE;
 				return resistorValue(id);
 			}
 
 			function componentIntrinsicResistance(id) {
 				if (isExtraCell(id)) return state.internalR ? getCellRInternal(id) : 0;
 				if (isCircuitSwitch(id)) return isComponentSwitchClosed(id) ? closedSwitchWireResistance(id) : SWITCH_OPEN_RESISTANCE;
+				if (isPotentiometer(id)) return POTENTIOMETER_TOTAL_RESISTANCE;
 				return resistorValue(id);
 			}
 
@@ -425,8 +634,32 @@ export class CircuitApp {
 			}
 
 			function componentBodyHeight(id) {
+				if (isPotentiometer(id)) return RES_H * 3 + CONNECTOR_WIRE * 3;
 				if (isExtraCell(id) && state.internalR) return RES_H + INTERNAL_R_HEIGHT_EXTRA;
+				if (isCoupledR5(id) && isPotentiometerPresetActive()) {
+					return RES_H * 4 * (resistorValue(id) / 6);
+				}
 				return RES_H;
+			}
+
+			function potentiometerSectionBounds(topY, bottomY, id = "P1") {
+				const totalHeight = Math.max(0, bottomY - topY);
+				const topLead = CONNECTOR_WIRE;
+				const bottomLead = CONNECTOR_WIRE;
+				const upperTop = topY + topLead;
+				const bodySpan = Math.max(2, totalHeight - topLead - bottomLead);
+				const usableSpan = Math.max(1e-6, bodySpan - POTENTIOMETER_JUNCTION_LENGTH);
+				const joinTop = upperTop + usableSpan * potentiometerTapRatio(id);
+				const joinBottom = joinTop + POTENTIOMETER_JUNCTION_LENGTH;
+				const lowerBottom = topY + totalHeight - bottomLead;
+				return {
+					topLeadEnd: upperTop,
+					joinTop,
+					joinBottom,
+					joinY: joinTop + POTENTIOMETER_JUNCTION_LENGTH * 0.5,
+					bottomResEnd: lowerBottom,
+					bottomLeadStart: bottomY - bottomLead
+				};
 			}
 
 			function resistorRampWidthFactorById(id) {
@@ -479,7 +712,11 @@ export class CircuitApp {
 			function syncResistorValueInput(id) {
 				const input = rValueInputs[id];
 				if (!input) return;
-				input.value = (state.resistorValues[id] || 2.5).toFixed(1);
+				if (isPotentiometer(id)) {
+					input.value = potentiometerUpperResistance(id).toFixed(1);
+					return;
+				}
+				input.value = resistorValue(id).toFixed(1);
 			}
 
 			function updateLegendText() {
@@ -494,6 +731,241 @@ export class CircuitApp {
 				state.sortKeys = {};
 				state.leftSeries = enabledIds().filter((id) => isExtraCell(id));
 				state.stages = enabledIds().filter((id) => !isExtraCell(id)).map((id) => ({ branches: [[id]] }));
+				enforcePotentiometerSpecialSwitchRules();
+			}
+
+			function cloneObject(obj) {
+				return JSON.parse(JSON.stringify(obj));
+			}
+
+			function safeNumber(value, fallback) {
+				return Number.isFinite(value) ? value : fallback;
+			}
+
+			function sanitizeStageArray(stagesCandidate) {
+				if (!Array.isArray(stagesCandidate)) return [];
+				const cleaned = [];
+				for (const stage of stagesCandidate) {
+					if (!stage || !Array.isArray(stage.branches)) continue;
+					const branches = [];
+					for (const branch of stage.branches) {
+						if (!Array.isArray(branch)) continue;
+						const validIds = branch.filter((id) => typeof id === "string" && allowedComponentIds.has(id));
+						if (validIds.length > 0) branches.push(validIds);
+					}
+					if (branches.length > 0) cleaned.push({ branches });
+				}
+				return cleaned;
+			}
+
+			function applyUiCheckboxState(valuesById, lookup) {
+				for (const [id, checkbox] of Object.entries(lookup)) {
+					if (!checkbox) continue;
+					checkbox.checked = !!valuesById[id];
+				}
+			}
+
+			function collectCheckboxState(ids, lookup) {
+				const result = {};
+				for (const id of ids) {
+					result[id] = !!(lookup[id] && lookup[id].checked);
+				}
+				return result;
+			}
+
+			function buildSerializableConfig(configName) {
+				return {
+					type: "current-and-voltage",
+					version: 1,
+					name: configName || "config",
+					savedAt: new Date().toISOString(),
+					componentValues: {
+						resistorValues: cloneObject(state.resistorValues),
+						cellEmfById: cloneObject(state.cellEmfById),
+						cellPolarityById: cloneObject(state.cellPolarityById),
+						cellRInternalById: cloneObject(state.cellRInternalById),
+						switchClosedById: cloneObject(state.switchClosedById)
+					},
+					componentEnabled: {
+						resistors: collectResistorCheckboxState(),
+						cells: collectCheckboxState(EXTRA_CELL_IDS, cellChecks),
+						switches: collectCheckboxState(EXTRA_SWITCH_IDS, switchChecks),
+						internalResistance: !!(intRCheck && intRCheck.checked)
+					},
+					layout: {
+						leftSeries: (state.leftSeries || []).slice(),
+						stages: cloneObject(state.stages || []),
+						sortKeys: cloneObject(state.sortKeys || {})
+					},
+					display: {
+						voltageColorMode: !!state.voltageColorMode,
+						potentialGraphMode: !!state.potentialGraphMode,
+						invertVoltageAxis: !!state.invertVoltageAxis,
+						debugMode: !!state.debugMode,
+						debugLabels: !!state.debugLabels,
+						debugJunctionIds: !!state.debugJunctionIds,
+						debugNodePotentials: !!state.debugNodePotentials,
+						wireResistanceLabels: !!state.wireResistanceLabels,
+						nodesIRLabels: !!state.nodesIRLabels
+					}
+				};
+			}
+
+			function applyLoadedConfig(config) {
+				const componentEnabled = (config && config.componentEnabled) || {};
+				const componentValues = (config && config.componentValues) || {};
+				const layoutCfg = (config && config.layout) || {};
+				const displayCfg = (config && config.display) || {};
+
+				if (intRCheck) intRCheck.checked = !!componentEnabled.internalResistance;
+				state.internalR = !!componentEnabled.internalResistance;
+
+				applyResistorCheckboxState(componentEnabled.resistors || {});
+				applyUiCheckboxState(componentEnabled.cells || {}, cellChecks);
+				applyUiCheckboxState(componentEnabled.switches || {}, switchChecks);
+
+				for (const r of resistorDefs) {
+					const loaded = componentValues.resistorValues ? componentValues.resistorValues[r.id] : undefined;
+					if (isCoupledR5(r.id)) {
+						continue;
+					}
+					if (isPotentiometer(r.id)) {
+						const loadedVal = safeNumber(loaded, defaultResistorValues[r.id]);
+						const normalized = loadedVal > 1 ? (loadedVal / POTENTIOMETER_TOTAL_RESISTANCE) : loadedVal;
+						state.resistorValues[r.id] = clamp(normalized, 0, 1);
+					} else {
+						state.resistorValues[r.id] = clamp(safeNumber(loaded, defaultResistorValues[r.id]), RESISTOR_VALUE_MIN, RESISTOR_VALUE_MAX);
+					}
+					syncResistorValueInput(r.id);
+				}
+				setCoupledR5aValue(coupledR5aFromStoredValues(componentValues.resistorValues || {}));
+				syncResistorValueInput("R5a");
+				syncResistorValueInput("R5b");
+
+				for (const id of EXTRA_CELL_IDS) {
+					const loadedEmf = componentValues.cellEmfById ? componentValues.cellEmfById[id] : undefined;
+					const loadedPol = componentValues.cellPolarityById ? componentValues.cellPolarityById[id] : undefined;
+					const loadedR = componentValues.cellRInternalById ? componentValues.cellRInternalById[id] : undefined;
+					state.cellEmfById[id] = clamp(safeNumber(loadedEmf, defaultCellEmf[id]), 0, 12);
+					state.cellPolarityById[id] = loadedPol === -1 ? -1 : 1;
+					state.cellRInternalById[id] = clamp(safeNumber(loadedR, defaultCellInternalR[id]), 0, 10);
+				}
+
+				state.switchClosedById = cloneObject(defaultSwitchStates);
+				for (const [id, defaultClosed] of Object.entries(defaultSwitchStates)) {
+					const loadedClosed = componentValues.switchClosedById ? componentValues.switchClosedById[id] : undefined;
+					state.switchClosedById[id] = typeof loadedClosed === "boolean" ? loadedClosed : defaultClosed;
+				}
+
+				if (voltageColorCheck) voltageColorCheck.checked = !!displayCfg.voltageColorMode;
+				if (potentialGraphCheck) potentialGraphCheck.checked = !!displayCfg.potentialGraphMode;
+				if (invertVoltageAxisCheck) invertVoltageAxisCheck.checked = displayCfg.invertVoltageAxis !== false;
+				if (debugModeCheck) debugModeCheck.checked = !!displayCfg.debugMode;
+				if (debugLabelsCheck) debugLabelsCheck.checked = !!displayCfg.debugLabels;
+				if (debugJunctionIdsCheck) debugJunctionIdsCheck.checked = !!displayCfg.debugJunctionIds;
+				if (debugNodePotentialsCheck) debugNodePotentialsCheck.checked = !!displayCfg.debugNodePotentials;
+				if (wireResLabelsCheck) wireResLabelsCheck.checked = !!displayCfg.wireResistanceLabels;
+				if (nodesIRLabelsCheck) nodesIRLabelsCheck.checked = !!displayCfg.nodesIRLabels;
+
+				state.voltageColorMode = !!displayCfg.voltageColorMode;
+				state.potentialGraphMode = !!displayCfg.potentialGraphMode;
+				state.invertVoltageAxis = displayCfg.invertVoltageAxis !== false;
+				setDebugControlsVisible(!!displayCfg.debugMode);
+				state.debugLabels = !!displayCfg.debugLabels;
+				state.debugJunctionIds = !!displayCfg.debugJunctionIds;
+				state.debugNodePotentials = !!displayCfg.debugNodePotentials;
+				state.wireResistanceLabels = !!displayCfg.wireResistanceLabels;
+				state.nodesIRLabels = !!displayCfg.nodesIRLabels;
+
+				const loadedLeftSeries = Array.isArray(layoutCfg.leftSeries)
+					? layoutCfg.leftSeries.filter((id) => EXTRA_CELL_IDS.includes(id))
+					: [];
+				const loadedStages = sanitizeStageArray(layoutCfg.stages);
+				if (loadedLeftSeries.length || loadedStages.length) {
+					state.leftSeries = loadedLeftSeries.slice();
+					state.stages = loadedStages;
+				} else {
+					resetStagesFromEnabled();
+				}
+
+				state.sortKeys = {};
+				if (layoutCfg.sortKeys && typeof layoutCfg.sortKeys === "object") {
+					for (const [id, value] of Object.entries(layoutCfg.sortKeys)) {
+						if (allowedComponentIds.has(id) && Number.isFinite(value)) {
+							state.sortKeys[id] = value;
+						}
+					}
+				}
+
+				enforcePotentiometerSpecialSwitchRules();
+				updatePotentiometerSpecialSwitchControlVisibility();
+
+				autoFitCircuitViewToCanvas();
+				resetGraphZoomToFit();
+				if (isPaused) render();
+			}
+
+			function applyDefaultConfiguration() {
+				state.currentPreset = null;
+				state.lockedComponentIds = new Set();
+				updatePotentiometerSpecialSwitchControlVisibility();
+
+				if (intRCheck) intRCheck.checked = false;
+				state.internalR = false;
+
+				for (const r of resistorDefs) {
+					setResistorEnabled(r.id, r.id === "R1");
+					if (!isCoupledR5(r.id)) {
+						state.resistorValues[r.id] = defaultResistorValues[r.id];
+					}
+					syncResistorValueInput(r.id);
+				}
+				setCoupledR5aValue(defaultResistorValues.R5a);
+				syncResistorValueInput("R5a");
+				syncResistorValueInput("R5b");
+
+				for (const id of EXTRA_CELL_IDS) {
+					if (cellChecks[id]) cellChecks[id].checked = (id === "Cell1");
+					state.cellEmfById[id] = defaultCellEmf[id];
+					state.cellPolarityById[id] = defaultCellPolarity[id];
+					state.cellRInternalById[id] = defaultCellInternalR[id];
+				}
+
+				for (const id of EXTRA_SWITCH_IDS) {
+					if (switchChecks[id]) switchChecks[id].checked = false;
+				}
+
+				state.switchClosedById = cloneObject(defaultSwitchStates);
+
+				if (voltageColorCheck) voltageColorCheck.checked = false;
+				if (potentialGraphCheck) potentialGraphCheck.checked = false;
+				if (invertVoltageAxisCheck) invertVoltageAxisCheck.checked = true;
+				if (debugModeCheck) debugModeCheck.checked = false;
+				if (debugLabelsCheck) debugLabelsCheck.checked = false;
+				if (debugJunctionIdsCheck) debugJunctionIdsCheck.checked = false;
+				if (debugNodePotentialsCheck) debugNodePotentialsCheck.checked = false;
+				if (wireResLabelsCheck) wireResLabelsCheck.checked = false;
+				if (nodesIRLabelsCheck) nodesIRLabelsCheck.checked = false;
+
+				state.voltageColorMode = false;
+				state.potentialGraphMode = false;
+				state.invertVoltageAxis = true;
+				setDebugControlsVisible(false);
+				state.graphAzimuth = graphOrientationDefaults.azimuth;
+				state.graphElevation = graphOrientationDefaults.elevation;
+				state.graphRoll = graphOrientationDefaults.roll;
+				state.graphZoom = 1;
+				state.graphPanX = 0;
+				state.graphPanY = 0;
+				state.viewZoom = 1;
+				state.viewPanX = 0;
+				state.viewPanY = 0;
+
+				if (presetSelect) presetSelect.value = "default";
+				resetStagesFromEnabled();
+				autoFitCircuitViewToCanvas();
+				resetGraphZoomToFit();
+				if (isPaused) render();
 			}
 
 			function normalizeStages() {
@@ -518,6 +990,7 @@ export class CircuitApp {
 					}
 				}
 				state.stages = normalized;
+				enforcePotentiometerSpecialSwitchRules();
 			}
 
 			function removeResistorFromStages(id) {
@@ -526,6 +999,7 @@ export class CircuitApp {
 						branches: stage.branches.map((branch) => branch.filter((item) => item !== id)).filter((branch) => branch.length > 0)
 					}))
 					.filter((stage) => stage.branches.length > 0);
+				enforcePotentiometerSpecialSwitchRules();
 			}
 
 			function removeFromLeftSeries(id) {
@@ -604,6 +1078,32 @@ export class CircuitApp {
 			function insertIntoBranchByTarget(id, targetId, mode) {
 				removeResistorFromStages(id);
 				removeFromLeftSeries(id);
+				const mappedSwitchId = potentiometerSpecialSwitchForR5(targetId);
+				if (mappedSwitchId) {
+					const entry = potentiometerSpecialSwitchEntryById(mappedSwitchId);
+					if (!entry) return;
+					while (state.stages.length <= entry.stageIndex) {
+						state.stages.push({ branches: [[]] });
+					}
+					const stage = state.stages[entry.stageIndex];
+					if (!stage.branches || !Array.isArray(stage.branches)) stage.branches = [];
+					while (stage.branches.length <= entry.branchIndex) {
+						stage.branches.push([]);
+					}
+					const branch = Array.isArray(stage.branches[entry.branchIndex])
+						? stage.branches[entry.branchIndex]
+						: (stage.branches[entry.branchIndex] = []);
+					for (let i = branch.length - 1; i >= 0; i--) {
+						if (branch[i] === mappedSwitchId) branch.splice(i, 1);
+					}
+					if (mode === "before") {
+						branch.unshift(id);
+					} else {
+						branch.push(id);
+					}
+					normalizeStages();
+					return;
+				}
 				const loc = findResistorLocation(targetId);
 				if (!loc) return;
 				const branch = state.stages[loc.stageIndex].branches[loc.branchIndex];
@@ -612,6 +1112,73 @@ export class CircuitApp {
 				if (mode === "after") idx += 1;
 				branch.splice(clamp(idx, 0, branch.length), 0, id);
 				normalizeStages();
+			}
+
+			function draggedGroupIds() {
+				if (!state.drag || !Array.isArray(state.drag.groupIds) || state.drag.groupIds.length === 0) return [];
+				return state.drag.groupIds.slice();
+			}
+
+			function orderedSeriesGroupIds(ids) {
+				const dragOrder = state.drag && Array.isArray(state.drag.groupOrderedIds) ? state.drag.groupOrderedIds : null;
+				if (dragOrder) {
+					const wanted = new Set(ids);
+					const ordered = dragOrder.filter((id) => wanted.has(id));
+					if (ordered.length === ids.length) return ordered;
+				}
+				return ids.slice().sort((a, b) => componentSortKey(a) - componentSortKey(b));
+			}
+
+			function removeComponentsFromPlacement(ids) {
+				for (const id of ids) {
+					removeResistorFromStages(id);
+					removeFromLeftSeries(id);
+				}
+			}
+
+			function insertGroupAsSeriesAt(ids, index) {
+				const ordered = orderedSeriesGroupIds(ids);
+				removeComponentsFromPlacement(ordered);
+				let at = clamp(index, 0, state.stages.length);
+				for (const id of ordered) {
+					state.stages.splice(at, 0, { branches: [[id]] });
+					at += 1;
+				}
+				normalizeStages();
+			}
+
+			function insertGroupIntoLeftSeriesAt(ids, index) {
+				const ordered = orderedSeriesGroupIds(ids);
+				removeComponentsFromPlacement(ordered);
+				const at = clamp(index, 0, state.leftSeries.length);
+				state.leftSeries.splice(at, 0, ...ordered);
+			}
+
+			function insertGroupIntoBranchByTarget(ids, targetId, mode) {
+				const ordered = orderedSeriesGroupIds(ids);
+				removeComponentsFromPlacement(ordered);
+				const loc = findResistorLocation(targetId);
+				if (!loc) return;
+				const branch = state.stages[loc.stageIndex].branches[loc.branchIndex];
+				let idx = branch.indexOf(targetId);
+				if (idx < 0) return;
+				if (mode === "after") idx += 1;
+				branch.splice(clamp(idx, 0, branch.length), 0, ...ordered);
+				normalizeStages();
+			}
+
+			function getActiveDragForItem(itemId) {
+				if (!state.drag) return null;
+				if (state.drag.id === itemId) return state.drag;
+				const offsets = state.drag.groupOffsetsById;
+				if (!offsets || !Object.prototype.hasOwnProperty.call(offsets, itemId)) return null;
+				const offset = offsets[itemId];
+				return {
+					...state.drag,
+					id: itemId,
+					x: state.drag.x + offset.x,
+					y: state.drag.y + offset.y
+				};
 			}
 
 			function computeLayoutImpl(w, h) {
@@ -708,12 +1275,19 @@ export class CircuitApp {
 						const x = branchCount === 1 ? xRight : startX + branchIndex * PARALLEL_GAP;
 						const branchSpan = branchHeight(branch, isParallel, hasMergeBusAbove, hasSplitBusBelow, isTopBoundaryStage, isBottomBoundaryStage);
 						const offset = (stageHeight - branchSpan) / 2;
+						const firstId = branch.length ? branch[0] : null;
+						const lastId = branch.length ? branch[branch.length - 1] : null;
+						const topStretchToPot = offset > 0 && isPotentiometer(firstId);
+						const bottomStretchToPot = offset > 0 && isPotentiometer(lastId);
+						const topOffsetRemainder = topStretchToPot ? 0 : offset;
 						const items = [];
 						// Stages attached to a bus above start with a BUS_CONNECTOR before CONNECTOR_WIRE.
-						let cursorY = junctionTop + offset + topBusPadding;
+						let cursorY = junctionTop + topOffsetRemainder + topBusPadding;
 						for (let seriesIndex = 0; seriesIndex < branch.length; seriesIndex++) {
 							const id = branch[seriesIndex];
-							const bodyHeight = componentBodyHeight(id);
+							let bodyHeight = componentBodyHeight(id);
+							if (id === firstId && topStretchToPot) bodyHeight += offset;
+							if (id === lastId && bottomStretchToPot) bodyHeight += offset;
 							cursorY += CONNECTOR_WIRE;
 							const top = cursorY;
 							const bottom = top + bodyHeight;
@@ -783,11 +1357,19 @@ export class CircuitApp {
 				}
 
 				const leftExtra = Math.max(0, (yBottom - yTop) - (leftComponentHeight + END_BUS_CONNECTOR * 2));
-				const leftTopLead = END_BUS_CONNECTOR + leftExtra * 0.5;
+				const leftTopStretch = leftExtra * 0.5;
+				const leftBottomStretch = leftExtra * 0.5;
+				const leftFirstId = state.leftSeries.length ? state.leftSeries[0] : null;
+				const leftLastId = state.leftSeries.length ? state.leftSeries[state.leftSeries.length - 1] : null;
+				const absorbLeftTopStretch = leftTopStretch > 0 && isPotentiometer(leftFirstId);
+				const absorbLeftBottomStretch = leftBottomStretch > 0 && isPotentiometer(leftLastId);
+				const leftTopLead = END_BUS_CONNECTOR + (absorbLeftTopStretch ? 0 : leftTopStretch);
 				let leftCursorY = yTop + leftTopLead;
 				for (let leftIndex = 0; leftIndex < state.leftSeries.length; leftIndex++) {
 					const id = state.leftSeries[leftIndex];
-					const bodyHeight = componentBodyHeight(id);
+					let bodyHeight = componentBodyHeight(id);
+					if (id === leftFirstId && absorbLeftTopStretch) bodyHeight += leftTopStretch;
+					if (id === leftLastId && absorbLeftBottomStretch) bodyHeight += leftBottomStretch;
 					leftCursorY += CONNECTOR_WIRE;
 					const top = leftCursorY;
 					const bottom = top + bodyHeight;
@@ -1997,7 +2579,7 @@ export class CircuitApp {
 				};
 				for (let si = 0; si < segments.length; si++) {
 					const seg = segments[si];
-					if (!seg || seg.role !== "component-main" || !seg.componentId) continue;
+					if (!seg || seg.role !== "component-main" || !seg.componentId || seg.componentSection === "junction") continue;
 					if (!Number.isFinite(seg.x1) || !Number.isFinite(seg.y1) || !Number.isFinite(seg.x2) || !Number.isFinite(seg.y2)) continue;
 					const rawLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
 					const effLen = Number.isFinite(segmentEffectiveLengthByIndex[si])
@@ -2040,13 +2622,15 @@ export class CircuitApp {
 								: 0;
 						} else if (isBranchSwitch(cid)) {
 							segmentR = componentIntrinsicResistance(cid);
+						} else if (isPotentiometer(cid)) {
+							segmentR = potentiometerSectionResistance(cid, seg.componentSection);
 						} else {
 							segmentR = resistorValue(cid);
 						}
 					}
 					segmentR = Math.max(0, Number.isFinite(segmentR) ? segmentR : 0);
 					baseResistanceByIndex[si] = segmentR;
-					labelEligibleByIndex[si] = len > 6;
+					labelEligibleByIndex[si] = len > 6 && seg.componentSection !== "junction";
 					const k1 = pointKey(seg.x1, seg.y1);
 					const k2 = pointKey(seg.x2, seg.y2);
 					segmentEndpointKeys[si] = { k1, k2 };
@@ -2684,7 +3268,7 @@ export class CircuitApp {
 				let leftBranchV = topNodeV;
 				for (const item of (layout.leftSeriesItems || [])) {
 					drawWireSegment(x, leftBranchY, x, item.top, leftBranchV, leftBranchV, item.top - leftBranchY > CONNECTOR_WIRE + 1 ? "END_BUS_CONNECTOR" : "CONNECTOR_WIRE");
-					drawResistorBody(item, state.drag && state.drag.id === item.id ? state.drag : null, state.solved && state.solved.byId[item.id]);
+					drawResistorBody(item, getActiveDragForItem(item.id), state.solved && state.solved.byId[item.id]);
 					const leftSol = state.solved && state.solved.byId[item.id];
 					if (leftSol && Number.isFinite(leftSol.Vbottom)) {
 						leftBranchV = leftSol.Vbottom;
@@ -2947,6 +3531,78 @@ export class CircuitApp {
 						ctx.fillText("-", 36, cellPolarity > 0 ? plateTop : plateBottom);
 						ctx.fillText("+", 36, cellPolarity > 0 ? plateBottom : plateTop);
 					}
+				} else if (isPotentiometer(item.id)) {
+					if (activeDrag) {
+						ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+						ctx.fillRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+						ctx.strokeStyle = "#4a90e2";
+						ctx.lineWidth = 3.2;
+						ctx.strokeRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+						ctx.fillStyle = "#27374f";
+						ctx.font = "700 13px system-ui, sans-serif";
+						ctx.textAlign = "center";
+						ctx.textBaseline = "middle";
+						ctx.fillText(item.id, 0, 0);
+					} else {
+						const localTop = item.top - y;
+						const localBottom = item.bottom - y;
+						const pot = potentiometerSectionBounds(localTop, localBottom, item.id);
+						const midV = topV + (bottomV - topV) * potentiometerTapRatio(item.id);
+						const drawPotSection = (topY, bottomY, vTop, vBottom) => {
+							const sectionHeight = bottomY - topY;
+							if (sectionHeight <= 1e-6) return;
+							ctx.fillStyle = "#ffffff";
+							ctx.fillRect(-RES_W / 2, topY, RES_W, sectionHeight);
+							ctx.strokeStyle = "#111";
+							ctx.lineWidth = 2.8;
+							ctx.strokeRect(-RES_W / 2, topY, RES_W, sectionHeight);
+							if (state.voltageColorMode) {
+								ctx.lineCap = "round";
+								ctx.lineWidth = 3;
+								const grad = ctx.createLinearGradient(0, topY, 0, bottomY);
+								grad.addColorStop(0, voltageToColor(vTop));
+								grad.addColorStop(1, voltageToColor(vBottom));
+								ctx.strokeStyle = grad;
+								ctx.beginPath();
+								ctx.moveTo(0, topY);
+								ctx.lineTo(0, bottomY);
+								ctx.stroke();
+							}
+						};
+						ctx.strokeStyle = "#111";
+						ctx.lineWidth = 5;
+						ctx.beginPath();
+						ctx.moveTo(0, localTop);
+						ctx.lineTo(0, pot.topLeadEnd);
+						ctx.moveTo(0, pot.bottomResEnd);
+						ctx.lineTo(0, localBottom);
+						ctx.stroke();
+						drawPotSection(pot.topLeadEnd, pot.joinTop, topV, midV);
+						drawPotSection(pot.joinTop, pot.joinBottom, midV, midV);
+						drawPotSection(pot.joinBottom, pot.bottomResEnd, midV, bottomV);
+						ctx.strokeStyle = "#1f2833";
+						ctx.lineWidth = 2;
+						ctx.beginPath();
+						ctx.moveTo(-RES_W / 2, pot.joinY);
+						ctx.lineTo(RES_W / 2, pot.joinY);
+						ctx.moveTo(RES_W / 2, pot.joinY);
+						ctx.lineTo(RES_W / 2 + 11, pot.joinY - 11);
+						ctx.stroke();
+						ctx.beginPath();
+						ctx.arc(RES_W / 2 + 11, pot.joinY - 11, 3, 0, Math.PI * 2);
+						ctx.fillStyle = "#27374f";
+						ctx.fill();
+						ctx.fillStyle = "#27374f";
+						ctx.font = "700 12px system-ui, sans-serif";
+						ctx.textAlign = "center";
+						ctx.textBaseline = "middle";
+						ctx.fillText(item.id, 0, pot.topLeadEnd - 12);
+						ctx.font = "600 10.5px system-ui, sans-serif";
+						ctx.fillStyle = "#334";
+						if (sol) {
+							ctx.fillText(Math.abs(bottomV - topV).toFixed(2) + " V", 0, pot.bottomResEnd + 12);
+						}
+					}
 				} else if (isBranchSwitch(item.id)) {
 					const switchClosed = isComponentSwitchClosed(item.id);
 					const contactTopY = -16;
@@ -3008,21 +3664,24 @@ export class CircuitApp {
 						ctx.fillText(sol.V.toFixed(2) + " V", -14, 8);
 					}
 				} else {
+					const resistorBoxHeight = isCoupledR5(item.id) && isPotentiometerPresetActive()
+						? Math.max(0, item.height || componentBodyHeight(item.id))
+						: RES_H;
 					ctx.fillStyle = activeDrag ? "rgba(255, 255, 255, 0.88)" : "#ffffff";
-					ctx.fillRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+					ctx.fillRect(-RES_W / 2, -resistorBoxHeight / 2, RES_W, resistorBoxHeight);
 					ctx.strokeStyle = activeDrag ? "#4a90e2" : "#111";
 					ctx.lineWidth = activeDrag ? 3.2 : 2.8;
-					ctx.strokeRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+					ctx.strokeRect(-RES_W / 2, -resistorBoxHeight / 2, RES_W, resistorBoxHeight);
 					if (state.voltageColorMode) {
 						ctx.lineCap = "round";
 						ctx.lineWidth = 3;
-						const grad = ctx.createLinearGradient(0, -RES_H / 2, 0, RES_H / 2);
+						const grad = ctx.createLinearGradient(0, -resistorBoxHeight / 2, 0, resistorBoxHeight / 2);
 						grad.addColorStop(0, voltageToColor(topV));
 						grad.addColorStop(1, voltageToColor(bottomV));
 						ctx.strokeStyle = grad;
 						ctx.beginPath();
-						ctx.moveTo(0, -RES_H / 2);
-						ctx.lineTo(0, RES_H / 2);
+						ctx.moveTo(0, -resistorBoxHeight / 2);
+						ctx.lineTo(0, resistorBoxHeight / 2);
 						ctx.stroke();
 					}
 					ctx.textAlign = "center";
@@ -3030,11 +3689,23 @@ export class CircuitApp {
 					if (activeDrag) {
 						ctx.fillStyle = "#27374f";
 						ctx.font = "700 13px system-ui, sans-serif";
-						ctx.fillText(item.id, 0, 0);
+						if (isCoupledR5(item.id) && isPotentiometerPresetActive()) {
+							ctx.textAlign = "right";
+							ctx.fillText(item.id, -46, 0);
+							ctx.textAlign = "center";
+						} else {
+							ctx.fillText(item.id, 0, 0);
+						}
 					} else {
 						ctx.fillStyle = "#27374f";
 						ctx.font = "700 12px system-ui, sans-serif";
-						ctx.fillText(item.id, 0, -22);
+						if (isCoupledR5(item.id) && isPotentiometerPresetActive()) {
+							ctx.textAlign = "right";
+							ctx.fillText(item.id, -46, 0);
+							ctx.textAlign = "center";
+						} else {
+							ctx.fillText(item.id, 0, -22);
+						}
 						ctx.font = "600 10.5px system-ui, sans-serif";
 						ctx.fillStyle = "#334";
 						if (sol) {
@@ -3043,14 +3714,27 @@ export class CircuitApp {
 					}
 				}
 				ctx.restore();
-				if (!activeDrag && !extraCell && !isBranchSwitch(item.id)) {
-					drawCanvasSlider(item.id, state.resistorValues[item.id] || 2.5, {
+				if (!activeDrag && !extraCell && !isBranchSwitch(item.id) && item.id !== "R5b") {
+					const potSliderBounds = isPotentiometer(item.id) ? potentiometerSectionBounds(item.top, item.bottom, item.id) : null;
+					const sliderBodyHeight = isCoupledR5(item.id) && isPotentiometerPresetActive()
+						? Math.max(0, item.height || componentBodyHeight(item.id))
+						: RES_H;
+					const coupledR5bItem = isCoupledR5Controller(item.id) && isPotentiometerPresetActive() && state.layout && Array.isArray(state.layout.rects)
+						? state.layout.rects.find((rect) => rect && rect.id === "R5b")
+						: null;
+					const sliderTrackTop = coupledR5bItem
+						? item.top
+						: (potSliderBounds ? potSliderBounds.topLeadEnd : (y - sliderBodyHeight / 2 + 12));
+					const sliderTrackBottom = coupledR5bItem
+						? coupledR5bItem.bottom
+						: (potSliderBounds ? potSliderBounds.bottomResEnd : (y + sliderBodyHeight / 2 - 6));
+					drawCanvasSlider(item.id, isPotentiometer(item.id) ? potentiometerTapRatio(item.id) : resistorValue(item.id), {
 						trackX: x - 36,
-						trackTop: y - RES_H / 2 + 12,
-						trackBottom: y + RES_H / 2 - 6,
-						min: 0.1,
-						max: 10,
-						step: 0.1,
+						trackTop: sliderTrackTop,
+						trackBottom: sliderTrackBottom,
+						min: isPotentiometer(item.id) || isCoupledR5Controller(item.id) ? 0 : 0.1,
+						max: isPotentiometer(item.id) ? 1 : (isCoupledR5Controller(item.id) ? 6 : 10),
+						step: isPotentiometer(item.id) ? 0.01 : 0.1,
 						label: item.id,
 						showValueTop: true
 					});
@@ -3095,7 +3779,10 @@ export class CircuitApp {
 				const showValueTop = !!opts.showValueTop;
 				const valueSuffix = opts.valueSuffix || "\u03a9";
 				const span = Math.max(0.001, max - min);
-				const sphereY = trackTop + ((max - value) / span) * (trackBottom - trackTop);
+				const isTopToBottomIncreasing = paramKey === "P1" || isCoupledR5Controller(paramKey);
+				const sphereY = isTopToBottomIncreasing
+					? (trackTop + ((value - min) / span) * (trackBottom - trackTop))
+					: (trackTop + ((max - value) / span) * (trackBottom - trackTop));
 
 				const hit = sliderHitAreas.find((s) => s.paramKey === paramKey);
 				const rec = { paramKey, trackX, trackTop, trackBottom, sphereY, min, max, step };
@@ -3289,6 +3976,65 @@ export class CircuitApp {
 				ctx.restore();
 			}
 
+			function drawHorizontalBusArrow(midX, y, signedCurrent) {
+				const arrowY = y - 9;
+				const dir = signedCurrent < 0 ? -1 : 1;
+				const halfLen = 5.33;
+				const headLen = 2.67;
+				const shaftStartX = midX - dir * halfLen;
+				const shaftTipX = midX + dir * halfLen;
+				ctx.save();
+				ctx.strokeStyle = "#c0392b";
+				ctx.fillStyle = "#c0392b";
+				ctx.lineWidth = 2;
+				ctx.beginPath();
+				ctx.moveTo(shaftStartX, arrowY);
+				ctx.lineTo(shaftTipX, arrowY);
+				ctx.stroke();
+				ctx.beginPath();
+				ctx.moveTo(shaftTipX + dir * headLen, arrowY);
+				ctx.lineTo(shaftTipX - dir * 1.33, arrowY - 2.67);
+				ctx.lineTo(shaftTipX - dir * 1.33, arrowY + 2.67);
+				ctx.closePath();
+				ctx.fill();
+				ctx.font = "600 10.5px system-ui, sans-serif";
+				ctx.textAlign = "center";
+				ctx.textBaseline = "bottom";
+				const busLabel = formatCurrentLabel(signedCurrent, state.solved && state.solved.forceInfiniteAllCurrents === true);
+				ctx.fillText(busLabel, midX, arrowY - 4);
+				ctx.restore();
+			}
+
+			function horizontalBusCurrentFromTable(y, leftX, rightX) {
+				const rows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
+				if (!rows.length) return null;
+				const minX = Math.min(leftX, rightX);
+				const maxX = Math.max(leftX, rightX);
+				let best = null;
+				for (const row of rows) {
+					if (!row || !row.fromKey || !row.toKey || !Number.isFinite(row.current)) continue;
+					const fromBits = String(row.fromKey).split("|");
+					const toBits = String(row.toKey).split("|");
+					if (fromBits.length !== 2 || toBits.length !== 2) continue;
+					const x1 = Number(fromBits[0]);
+					const y1 = Number(fromBits[1]);
+					const x2 = Number(toBits[0]);
+					const y2 = Number(toBits[1]);
+					if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) continue;
+					if (Math.abs(y2 - y1) > 1.2) continue;
+					const rowY = (y1 + y2) * 0.5;
+					if (Math.abs(rowY - y) > 1.6) continue;
+					const segMinX = Math.min(x1, x2);
+					const segMaxX = Math.max(x1, x2);
+					const overlap = Math.min(segMaxX, maxX) - Math.max(segMinX, minX);
+					if (!(overlap > 2)) continue;
+					if (!best || overlap > best.overlap) {
+						best = { overlap, current: row.current };
+					}
+				}
+				return best ? best.current : null;
+			}
+
 			function drawDebugWireMeasurement(x, y1, y2, label) {
 				if (!state.debugLabels) return;
 				const dist = Math.abs(y2 - y1);
@@ -3347,6 +4093,18 @@ export class CircuitApp {
 						for (let i = 0; i < bottomBusPoints.length - 1; i++) {
 							drawWireSegment(bottomBusPoints[i].x, stageExitBottom, bottomBusPoints[i + 1].x, stageExitBottom, bottomBusPoints[i].v, bottomBusPoints[i + 1].v, bottomBusLabel);
 						}
+						if (isPotentiometerPresetActive()) {
+							const leftX = Math.min(topBusPoints[0].x, topBusPoints[topBusPoints.length - 1].x);
+							const rightX = Math.max(topBusPoints[0].x, topBusPoints[topBusPoints.length - 1].x);
+							if (rightX - leftX > 8) {
+								const midX = (leftX + rightX) * 0.5;
+								const fallbackCurrent = Number.isFinite(state.solved?.Itotal) ? state.solved.Itotal : 0;
+								const topBusCurrent = horizontalBusCurrentFromTable(stageEntryTop, leftX, rightX);
+								const bottomBusCurrent = horizontalBusCurrentFromTable(stageExitBottom, leftX, rightX);
+								drawHorizontalBusArrow(midX, stageEntryTop, Number.isFinite(topBusCurrent) ? topBusCurrent : fallbackCurrent);
+								drawHorizontalBusArrow(midX, stageExitBottom, Number.isFinite(bottomBusCurrent) ? bottomBusCurrent : fallbackCurrent);
+							}
+						}
 					}
 					for (const branch of stage.branches) {
 						const branchX = branch.x;
@@ -3381,7 +4139,7 @@ export class CircuitApp {
 										if (sol && (item.top - branchY) > 8) {
 											drawCurrentArrow(branchX, branchY, item.top, sol.I * (sol.arrowAlignFactor ?? 1));
 							}
-							drawResistorBody(item, state.drag && state.drag.id === item.id ? state.drag : null, sol);
+							drawResistorBody(item, getActiveDragForItem(item.id), sol);
 							if (sol && Number.isFinite(sol.Vbottom)) {
 								branchV = sol.Vbottom;
 							}
@@ -4165,22 +4923,103 @@ export class CircuitApp {
 								role: "shoulder-wire",
 								componentId: item.id,
 								pathHalfWidthStart: GRAPH_PATH_HALF_WIDTH,
-								pathHalfWidthEnd: halfWidth
+								pathHalfWidthEnd: isPotentiometer(item.id) ? GRAPH_PATH_HALF_WIDTH : halfWidth
 							});
 						}
-						segments.push({
-							x1: layout.xCell,
-							y1: item.top,
-							x2: layout.xCell,
-							y2: item.bottom,
-							v1: itemTopV,
-							v2: itemBottomV,
-							role: "component-main",
-							componentId: item.id,
-							forceStartVertical: true,
-							forceEndVertical: true,
-							pathHalfWidth: halfWidth
-						});
+						if (isPotentiometer(item.id)) {
+							const pot = potentiometerSectionBounds(item.top, item.bottom, item.id);
+							const midV = itemTopV + (itemBottomV - itemTopV) * potentiometerTapRatio(item.id);
+							if (item.top < pot.topLeadEnd - 1e-6) {
+								segments.push({
+									x1: layout.xCell,
+									y1: item.top,
+									x2: layout.xCell,
+									y2: pot.topLeadEnd,
+									v1: itemTopV,
+									v2: itemTopV,
+									role: "shoulder-wire",
+									componentId: item.id,
+									pathHalfWidthStart: GRAPH_PATH_HALF_WIDTH,
+									pathHalfWidthEnd: halfWidth
+								});
+							}
+							if (pot.topLeadEnd < pot.joinTop - 1e-6) {
+								segments.push({
+									x1: layout.xCell,
+									y1: pot.topLeadEnd,
+									x2: layout.xCell,
+									y2: pot.joinTop,
+									v1: itemTopV,
+									v2: midV,
+									role: "component-main",
+									componentId: item.id,
+									componentSection: "upper",
+									forceStartVertical: true,
+									forceEndVertical: true,
+									pathHalfWidth: halfWidth
+								});
+							}
+							if (pot.joinTop < pot.joinBottom - 1e-6) {
+								segments.push({
+									x1: layout.xCell,
+									y1: pot.joinTop,
+									x2: layout.xCell,
+									y2: pot.joinBottom,
+									v1: midV,
+									v2: midV,
+									role: "component-main",
+									componentId: item.id,
+									componentSection: "junction",
+									forceStartVertical: true,
+									forceEndVertical: true,
+									pathHalfWidth: halfWidth
+								});
+							}
+							if (pot.joinBottom < pot.bottomResEnd - 1e-6) {
+								segments.push({
+									x1: layout.xCell,
+									y1: pot.joinBottom,
+									x2: layout.xCell,
+									y2: pot.bottomResEnd,
+									v1: midV,
+									v2: itemBottomV,
+									role: "component-main",
+									componentId: item.id,
+									componentSection: "lower",
+									forceStartVertical: true,
+									forceEndVertical: true,
+									pathHalfWidth: halfWidth
+								});
+							}
+							if (pot.bottomResEnd < item.bottom - 1e-6) {
+								segments.push({
+									x1: layout.xCell,
+									y1: pot.bottomResEnd,
+									x2: layout.xCell,
+									y2: item.bottom,
+									v1: itemBottomV,
+									v2: itemBottomV,
+									role: "shoulder-wire",
+									componentId: item.id,
+									pathHalfWidthStart: halfWidth,
+									pathHalfWidthEnd: GRAPH_PATH_HALF_WIDTH
+								});
+							}
+						} else {
+							segments.push({
+								x1: layout.xCell,
+								y1: item.top,
+								x2: layout.xCell,
+								y2: item.bottom,
+								v1: itemTopV,
+								v2: itemBottomV,
+								role: "component-main",
+								componentId: item.id,
+								forceStartVertical: true,
+								forceEndVertical: true,
+								pathHalfWidth: halfWidth
+							});
+						}
 						if (item.bottom < bottomBound - 1e-6) {
 							segments.push({
 								x1: item.x,
@@ -4191,7 +5030,7 @@ export class CircuitApp {
 								v2: itemBottomV,
 								role: "shoulder-wire",
 								componentId: item.id,
-								pathHalfWidthStart: halfWidth,
+								pathHalfWidthStart: isPotentiometer(item.id) ? GRAPH_PATH_HALF_WIDTH : halfWidth,
 								pathHalfWidthEnd: GRAPH_PATH_HALF_WIDTH
 							});
 						}
@@ -4308,22 +5147,103 @@ export class CircuitApp {
 											role: "shoulder-wire",
 											componentId: item.id,
 											pathHalfWidthStart: GRAPH_PATH_HALF_WIDTH,
-											pathHalfWidthEnd: componentHalfWidth
+											pathHalfWidthEnd: isPotentiometer(item.id) ? GRAPH_PATH_HALF_WIDTH : componentHalfWidth
 										});
 									}
-									segments.push({
-										x1: item.x,
-										y1: item.top,
-										x2: item.x,
-										y2: item.bottom,
-										v1: itemTopV,
-										v2: itemBottomV,
-										role: "component-main",
-										componentId: item.id,
-										forceStartVertical: true,
-										forceEndVertical: true,
-										pathHalfWidth: componentHalfWidth
-									});
+									if (isPotentiometer(item.id)) {
+										const pot = potentiometerSectionBounds(item.top, item.bottom, item.id);
+										const midV = itemTopV + (itemBottomV - itemTopV) * potentiometerTapRatio(item.id);
+										if (item.top < pot.topLeadEnd - 1e-6) {
+											segments.push({
+												x1: item.x,
+												y1: item.top,
+												x2: item.x,
+												y2: pot.topLeadEnd,
+												v1: itemTopV,
+												v2: itemTopV,
+												role: "shoulder-wire",
+												componentId: item.id,
+												pathHalfWidthStart: GRAPH_PATH_HALF_WIDTH,
+												pathHalfWidthEnd: componentHalfWidth
+											});
+										}
+										if (pot.topLeadEnd < pot.joinTop - 1e-6) {
+											segments.push({
+												x1: item.x,
+												y1: pot.topLeadEnd,
+												x2: item.x,
+												y2: pot.joinTop,
+												v1: itemTopV,
+												v2: midV,
+												role: "component-main",
+												componentId: item.id,
+													componentSection: "upper",
+												forceStartVertical: true,
+												forceEndVertical: true,
+												pathHalfWidth: componentHalfWidth
+											});
+										}
+										if (pot.joinTop < pot.joinBottom - 1e-6) {
+											segments.push({
+												x1: item.x,
+												y1: pot.joinTop,
+												x2: item.x,
+												y2: pot.joinBottom,
+												v1: midV,
+												v2: midV,
+												role: "component-main",
+												componentId: item.id,
+												componentSection: "junction",
+												forceStartVertical: true,
+												forceEndVertical: true,
+												pathHalfWidth: componentHalfWidth
+											});
+										}
+										if (pot.joinBottom < pot.bottomResEnd - 1e-6) {
+											segments.push({
+												x1: item.x,
+												y1: pot.joinBottom,
+												x2: item.x,
+												y2: pot.bottomResEnd,
+												v1: midV,
+												v2: itemBottomV,
+												role: "component-main",
+												componentId: item.id,
+													componentSection: "lower",
+												forceStartVertical: true,
+												forceEndVertical: true,
+												pathHalfWidth: componentHalfWidth
+											});
+										}
+										if (pot.bottomResEnd < item.bottom - 1e-6) {
+											segments.push({
+												x1: item.x,
+												y1: pot.bottomResEnd,
+												x2: item.x,
+												y2: item.bottom,
+												v1: itemBottomV,
+												v2: itemBottomV,
+												role: "shoulder-wire",
+												componentId: item.id,
+												pathHalfWidthStart: componentHalfWidth,
+												pathHalfWidthEnd: GRAPH_PATH_HALF_WIDTH
+											});
+										}
+									} else {
+										segments.push({
+											x1: item.x,
+											y1: item.top,
+											x2: item.x,
+											y2: item.bottom,
+											v1: itemTopV,
+											v2: itemBottomV,
+											role: "component-main",
+											componentId: item.id,
+											forceStartVertical: true,
+											forceEndVertical: true,
+											pathHalfWidth: componentHalfWidth
+										});
+									}
 									if (item.bottom < bottomBound - 1e-6) {
 										segments.push({
 											x1: item.x,
@@ -4334,7 +5254,7 @@ export class CircuitApp {
 											v2: itemBottomV,
 											role: "shoulder-wire",
 											componentId: item.id,
-											pathHalfWidthStart: componentHalfWidth,
+											pathHalfWidthStart: isPotentiometer(item.id) ? GRAPH_PATH_HALF_WIDTH : componentHalfWidth,
 											pathHalfWidthEnd: GRAPH_PATH_HALF_WIDTH
 										});
 									}
@@ -4536,9 +5456,22 @@ export class CircuitApp {
 			function collectPotentialGraphSegments(layout) {
 				const rawCircuitSegs = buildCircuitVoltageSegments(layout);
 				const tableSegs = buildTableDrivenGraphSegments(layout);
-				const segs = (tableSegs ? tableSegs.slice() : rawCircuitSegs.slice())
+				let segs = (tableSegs ? tableSegs.slice() : rawCircuitSegs.slice())
 					.filter((seg) => !isOpenSwitchGapVoltageSegment(seg));
 				if (!tableSegs) return segs;
+
+				const isPotentiometerSectionSegment = (seg) => !!(seg
+					&& seg.componentId
+					&& isPotentiometer(seg.componentId)
+					&& (seg.role === "component-main" || seg.role === "shoulder-wire"));
+
+				// Table-driven rows can collapse P1 into one section. Force raw split sections for P1.
+				segs = segs.filter((seg) => !isPotentiometerSectionSegment(seg));
+				for (const rawSeg of rawCircuitSegs) {
+					if (isOpenSwitchGapVoltageSegment(rawSeg)) continue;
+					if (!isPotentiometerSectionSegment(rawSeg)) continue;
+					segs.push(rawSeg);
+				}
 
 				const hasSegment = (candidate) => segs.some((s) =>
 					Math.abs(s.x1 - candidate.x1) < 1e-6
@@ -4735,10 +5668,25 @@ export class CircuitApp {
 					if (s.role === "component-main") {
 						jointMap.get(startKey).hasComponent = true;
 						jointMap.get(endKey).hasComponent = true;
+						if (isPotentiometer(s.componentId)) {
+							if (!jointMap.get(startKey).potSegmentCount) jointMap.get(startKey).potSegmentCount = 0;
+							if (!jointMap.get(endKey).potSegmentCount) jointMap.get(endKey).potSegmentCount = 0;
+							jointMap.get(startKey).potSegmentCount += 1;
+							jointMap.get(endKey).potSegmentCount += 1;
+							// Keep potentiometer section edges flush with the tap-junction band.
+							jointMap.get(startKey).skipTrim = true;
+							jointMap.get(endKey).skipTrim = true;
+						}
 					}
 					if (s.role === "switch-blade") {
 						jointMap.get(startKey).hasSwitch = true;
 						jointMap.get(endKey).hasSwitch = true;
+					}
+				}
+				for (const [key, joint] of jointMap.entries()) {
+					if ((joint && joint.potSegmentCount) >= 2) {
+						joint.hasCorner = true;
+						joint.skipTrim = true;
 					}
 				}
 
@@ -4991,6 +5939,66 @@ export class CircuitApp {
 							ctx.moveTo(bStart.x, bStart.y);
 							ctx.lineTo(bEnd.x, bEnd.y);
 							ctx.stroke();
+						} else if (isPotentiometer(item.id)) {
+							const pot = potentiometerSectionBounds(item.top, item.bottom, item.id);
+							if (pot.topLeadEnd < pot.joinTop - 1e-6) {
+								const pTL1 = project(item.left, pot.topLeadEnd, 0);
+								const pTR1 = project(item.right, pot.topLeadEnd, 0);
+								const pBR1 = project(item.right, pot.joinTop, 0);
+								const pBL1 = project(item.left, pot.joinTop, 0);
+								ctx.beginPath();
+								ctx.moveTo(pTL1.x, pTL1.y);
+								ctx.lineTo(pTR1.x, pTR1.y);
+								ctx.lineTo(pBR1.x, pBR1.y);
+								ctx.lineTo(pBL1.x, pBL1.y);
+								ctx.closePath();
+								ctx.fill();
+								ctx.stroke();
+							}
+							if (pot.joinTop < pot.joinBottom - 1e-6) {
+								const pTLJ = project(item.left, pot.joinTop, 0);
+								const pTRJ = project(item.right, pot.joinTop, 0);
+								const pBRJ = project(item.right, pot.joinBottom, 0);
+								const pBLJ = project(item.left, pot.joinBottom, 0);
+								ctx.beginPath();
+								ctx.moveTo(pTLJ.x, pTLJ.y);
+								ctx.lineTo(pTRJ.x, pTRJ.y);
+								ctx.lineTo(pBRJ.x, pBRJ.y);
+								ctx.lineTo(pBLJ.x, pBLJ.y);
+								ctx.closePath();
+								ctx.fill();
+								ctx.stroke();
+							}
+							if (pot.joinBottom < pot.bottomResEnd - 1e-6) {
+								const pTL2 = project(item.left, pot.joinBottom, 0);
+								const pTR2 = project(item.right, pot.joinBottom, 0);
+								const pBR2 = project(item.right, pot.bottomResEnd, 0);
+								const pBL2 = project(item.left, pot.bottomResEnd, 0);
+								ctx.beginPath();
+								ctx.moveTo(pTL2.x, pTL2.y);
+								ctx.lineTo(pTR2.x, pTR2.y);
+								ctx.lineTo(pBR2.x, pBR2.y);
+								ctx.lineTo(pBL2.x, pBL2.y);
+								ctx.closePath();
+								ctx.fill();
+								ctx.stroke();
+							}
+							const pJ1 = project(item.left, pot.joinY, 0);
+							const pJ2 = project(item.right, pot.joinY, 0);
+							const pW1 = project(item.right, pot.joinY, 0);
+							const pW2 = project(item.right + 11, pot.joinY - 11, 0);
+							ctx.strokeStyle = "rgba(24, 37, 56, 0.84)";
+							ctx.lineWidth = 1.8;
+							ctx.beginPath();
+							ctx.moveTo(pJ1.x, pJ1.y);
+							ctx.lineTo(pJ2.x, pJ2.y);
+							ctx.moveTo(pW1.x, pW1.y);
+							ctx.lineTo(pW2.x, pW2.y);
+							ctx.stroke();
+							ctx.beginPath();
+							ctx.arc(pW2.x, pW2.y, 2.5, 0, Math.PI * 2);
+							ctx.fillStyle = "rgba(24, 37, 56, 0.9)";
+							ctx.fill();
 						} else {
 							const pTL = project(item.left, item.top, 0);
 							const pTR = project(item.right, item.top, 0);
@@ -5021,8 +6029,13 @@ export class CircuitApp {
 						} else if (isBranchSwitch(item.id)) {
 							ctx.fillText(item.id, pc.x, pc.y);
 						} else {
-							const rVal = Number.isFinite(state.resistorValues[item.id]) ? state.resistorValues[item.id] : 0;
-							ctx.fillText(rVal.toFixed(1) + " \u03a9", pc.x, pc.y);
+							if (isPotentiometer(item.id)) {
+								const rTop = potentiometerUpperResistance(item.id);
+								const rBottom = potentiometerLowerResistance(item.id);
+								ctx.fillText(rTop.toFixed(1) + "/" + rBottom.toFixed(1) + " \u03a9", pc.x, pc.y);
+							} else {
+								ctx.fillText(resistorValue(item.id).toFixed(1) + " \u03a9", pc.x, pc.y);
+							}
 						}
 						ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
 					}
@@ -5218,6 +6231,7 @@ export class CircuitApp {
 					if (!joint.hasCorner) continue;
 					if (joint.hasSwitch) continue;
 					if (openGapJointKeys.has(key)) continue;
+					if ((joint && joint.potSegmentCount) >= 2) continue;
 					const parts = key.split("|");
 					const jx = Number(parts[0]);
 					const jy = Number(parts[1]);
@@ -5565,7 +6579,10 @@ export class CircuitApp {
 					const showValueTop = !!opts.showValueTop;
 					const valueSuffix = opts.valueSuffix || "\u03a9";
 					const span = Math.max(0.001, max - min);
-					const sphereY = trackTop + ((max - value) / span) * (trackBottom - trackTop);
+					const isTopToBottomIncreasing = paramKey === "P1" || isCoupledR5Controller(paramKey);
+					const sphereY = isTopToBottomIncreasing
+						? (trackTop + ((value - min) / span) * (trackBottom - trackTop))
+						: (trackTop + ((max - value) / span) * (trackBottom - trackTop));
 
 					const hit = sliderHitAreas.find((s) => s.paramKey === paramKey);
 					const rec = { paramKey, trackX, trackTop, trackBottom, sphereY, min, max, step };
@@ -5634,6 +6651,65 @@ export class CircuitApp {
 					const arrowLabel = formatCurrentLabel(I, state.solved && state.solved.forceInfiniteAllCurrents === true);
 					ctx.fillText(arrowLabel, arrowX + 8, midY);
 					ctx.restore();
+				}
+
+				drawHorizontalBusArrow(midX, y, signedCurrent) {
+					const arrowY = y - 9;
+					const dir = signedCurrent < 0 ? -1 : 1;
+					const halfLen = 5.33;
+					const headLen = 2.67;
+					const shaftStartX = midX - dir * halfLen;
+					const shaftTipX = midX + dir * halfLen;
+					ctx.save();
+					ctx.strokeStyle = "#c0392b";
+					ctx.fillStyle = "#c0392b";
+					ctx.lineWidth = 2;
+					ctx.beginPath();
+					ctx.moveTo(shaftStartX, arrowY);
+					ctx.lineTo(shaftTipX, arrowY);
+					ctx.stroke();
+					ctx.beginPath();
+					ctx.moveTo(shaftTipX + dir * headLen, arrowY);
+					ctx.lineTo(shaftTipX - dir * 1.33, arrowY - 2.67);
+					ctx.lineTo(shaftTipX - dir * 1.33, arrowY + 2.67);
+					ctx.closePath();
+					ctx.fill();
+					ctx.font = "600 10.5px system-ui, sans-serif";
+					ctx.textAlign = "center";
+					ctx.textBaseline = "bottom";
+					const busLabel = formatCurrentLabel(signedCurrent, state.solved && state.solved.forceInfiniteAllCurrents === true);
+					ctx.fillText(busLabel, midX, arrowY - 4);
+					ctx.restore();
+				}
+
+				horizontalBusCurrentFromTable(y, leftX, rightX) {
+					const rows = Array.isArray(state.wireLabelNodePairRows) ? state.wireLabelNodePairRows : [];
+					if (!rows.length) return null;
+					const minX = Math.min(leftX, rightX);
+					const maxX = Math.max(leftX, rightX);
+					let best = null;
+					for (const row of rows) {
+						if (!row || !row.fromKey || !row.toKey || !Number.isFinite(row.current)) continue;
+						const fromBits = String(row.fromKey).split("|");
+						const toBits = String(row.toKey).split("|");
+						if (fromBits.length !== 2 || toBits.length !== 2) continue;
+						const x1 = Number(fromBits[0]);
+						const y1 = Number(fromBits[1]);
+						const x2 = Number(toBits[0]);
+						const y2 = Number(toBits[1]);
+						if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) continue;
+						if (Math.abs(y2 - y1) > 1.2) continue;
+						const rowY = (y1 + y2) * 0.5;
+						if (Math.abs(rowY - y) > 1.6) continue;
+						const segMinX = Math.min(x1, x2);
+						const segMaxX = Math.max(x1, x2);
+						const overlap = Math.min(segMaxX, maxX) - Math.max(segMinX, minX);
+						if (!(overlap > 2)) continue;
+						if (!best || overlap > best.overlap) {
+							best = { overlap, current: row.current };
+						}
+					}
+					return best ? best.current : null;
 				}
 
 				parallelArrowDisplayFactor(layout) {
@@ -5788,6 +6864,78 @@ export class CircuitApp {
 							ctx.fillText("-", 36, cellPolarity > 0 ? plateTop : plateBottom);
 							ctx.fillText("+", 36, cellPolarity > 0 ? plateBottom : plateTop);
 						}
+					} else if (isPotentiometer(item.id)) {
+						if (activeDrag) {
+							ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+							ctx.fillRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+							ctx.strokeStyle = "#4a90e2";
+							ctx.lineWidth = 3.2;
+							ctx.strokeRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+							ctx.fillStyle = "#27374f";
+							ctx.font = "700 13px system-ui, sans-serif";
+							ctx.textAlign = "center";
+							ctx.textBaseline = "middle";
+							ctx.fillText(item.id, 0, 0);
+						} else {
+							const localTop = item.top - y;
+							const localBottom = item.bottom - y;
+							const pot = potentiometerSectionBounds(localTop, localBottom, item.id);
+							const midV = topV + (bottomV - topV) * potentiometerTapRatio(item.id);
+							const drawPotSection = (topY, bottomY, vTop, vBottom) => {
+								const sectionHeight = bottomY - topY;
+								if (sectionHeight <= 1e-6) return;
+								ctx.fillStyle = "#ffffff";
+								ctx.fillRect(-RES_W / 2, topY, RES_W, sectionHeight);
+								ctx.strokeStyle = "#111";
+								ctx.lineWidth = 2.8;
+								ctx.strokeRect(-RES_W / 2, topY, RES_W, sectionHeight);
+								if (state.voltageColorMode) {
+									ctx.lineCap = "round";
+									ctx.lineWidth = 3;
+									const grad = ctx.createLinearGradient(0, topY, 0, bottomY);
+									grad.addColorStop(0, this.voltageToColor(vTop));
+									grad.addColorStop(1, this.voltageToColor(vBottom));
+									ctx.strokeStyle = grad;
+									ctx.beginPath();
+									ctx.moveTo(0, topY);
+									ctx.lineTo(0, bottomY);
+									ctx.stroke();
+								}
+							};
+							ctx.strokeStyle = "#111";
+							ctx.lineWidth = 5;
+							ctx.beginPath();
+							ctx.moveTo(0, localTop);
+							ctx.lineTo(0, pot.topLeadEnd);
+							ctx.moveTo(0, pot.bottomResEnd);
+							ctx.lineTo(0, localBottom);
+							ctx.stroke();
+							drawPotSection(pot.topLeadEnd, pot.joinTop, topV, midV);
+							drawPotSection(pot.joinTop, pot.joinBottom, midV, midV);
+							drawPotSection(pot.joinBottom, pot.bottomResEnd, midV, bottomV);
+							ctx.strokeStyle = "#1f2833";
+							ctx.lineWidth = 2;
+							ctx.beginPath();
+							ctx.moveTo(-RES_W / 2, pot.joinY);
+							ctx.lineTo(RES_W / 2, pot.joinY);
+							ctx.moveTo(RES_W / 2, pot.joinY);
+							ctx.lineTo(RES_W / 2 + 11, pot.joinY - 11);
+							ctx.stroke();
+							ctx.beginPath();
+							ctx.arc(RES_W / 2 + 11, pot.joinY - 11, 3, 0, Math.PI * 2);
+							ctx.fillStyle = "#27374f";
+							ctx.fill();
+							ctx.fillStyle = "#27374f";
+							ctx.font = "700 12px system-ui, sans-serif";
+							ctx.textAlign = "center";
+							ctx.textBaseline = "middle";
+							ctx.fillText(item.id, 0, pot.topLeadEnd - 12);
+							ctx.font = "600 10.5px system-ui, sans-serif";
+							ctx.fillStyle = "#334";
+							if (sol) {
+								ctx.fillText(Math.abs(bottomV - topV).toFixed(2) + " V", 0, pot.bottomResEnd + 12);
+							}
+						}
 					} else if (isBranchSwitch(item.id)) {
 						const switchClosed = isComponentSwitchClosed(item.id);
 						const contactTopY = -16;
@@ -5849,21 +6997,24 @@ export class CircuitApp {
 							ctx.fillText(Math.abs(sol.V).toFixed(2) + " V", -14, 8);
 						}
 					} else {
+						const resistorBoxHeight = isCoupledR5(item.id) && isPotentiometerPresetActive()
+							? Math.max(0, item.height || componentBodyHeight(item.id))
+							: RES_H;
 						ctx.fillStyle = activeDrag ? "rgba(255, 255, 255, 0.88)" : "#ffffff";
-						ctx.fillRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+						ctx.fillRect(-RES_W / 2, -resistorBoxHeight / 2, RES_W, resistorBoxHeight);
 						ctx.strokeStyle = activeDrag ? "#4a90e2" : "#111";
 						ctx.lineWidth = activeDrag ? 3.2 : 2.8;
-						ctx.strokeRect(-RES_W / 2, -RES_H / 2, RES_W, RES_H);
+						ctx.strokeRect(-RES_W / 2, -resistorBoxHeight / 2, RES_W, resistorBoxHeight);
 						if (state.voltageColorMode) {
 							ctx.lineCap = "round";
 							ctx.lineWidth = 3;
-							const grad = ctx.createLinearGradient(0, -RES_H / 2, 0, RES_H / 2);
+							const grad = ctx.createLinearGradient(0, -resistorBoxHeight / 2, 0, resistorBoxHeight / 2);
 							grad.addColorStop(0, this.voltageToColor(topV));
 							grad.addColorStop(1, this.voltageToColor(bottomV));
 							ctx.strokeStyle = grad;
 							ctx.beginPath();
-							ctx.moveTo(0, -RES_H / 2);
-							ctx.lineTo(0, RES_H / 2);
+							ctx.moveTo(0, -resistorBoxHeight / 2);
+							ctx.lineTo(0, resistorBoxHeight / 2);
 							ctx.stroke();
 						}
 						ctx.textAlign = "center";
@@ -5871,11 +7022,23 @@ export class CircuitApp {
 						if (activeDrag) {
 							ctx.fillStyle = "#27374f";
 							ctx.font = "700 13px system-ui, sans-serif";
-							ctx.fillText(item.id, 0, 0);
+							if (isCoupledR5(item.id) && isPotentiometerPresetActive()) {
+								ctx.textAlign = "right";
+								ctx.fillText(item.id, -46, 0);
+								ctx.textAlign = "center";
+							} else {
+								ctx.fillText(item.id, 0, 0);
+							}
 						} else {
 							ctx.fillStyle = "#27374f";
 							ctx.font = "700 12px system-ui, sans-serif";
-							ctx.fillText(item.id, 0, -22);
+							if (isCoupledR5(item.id) && isPotentiometerPresetActive()) {
+								ctx.textAlign = "right";
+								ctx.fillText(item.id, -46, 0);
+								ctx.textAlign = "center";
+							} else {
+								ctx.fillText(item.id, 0, -22);
+							}
 							ctx.font = "600 10.5px system-ui, sans-serif";
 							ctx.fillStyle = "#334";
 							if (sol) {
@@ -5884,14 +7047,27 @@ export class CircuitApp {
 						}
 					}
 					ctx.restore();
-					if (!activeDrag && !extraCell && !isBranchSwitch(item.id)) {
-						this.drawCanvasSlider(item.id, state.resistorValues[item.id] || 2.5, {
+					if (!activeDrag && !extraCell && !isBranchSwitch(item.id) && item.id !== "R5b") {
+						const potSliderBounds = isPotentiometer(item.id) ? potentiometerSectionBounds(item.top, item.bottom, item.id) : null;
+						const sliderBodyHeight = isCoupledR5(item.id) && isPotentiometerPresetActive()
+							? Math.max(0, item.height || componentBodyHeight(item.id))
+							: RES_H;
+						const coupledR5bItem = isCoupledR5Controller(item.id) && isPotentiometerPresetActive() && state.layout && Array.isArray(state.layout.rects)
+							? state.layout.rects.find((rect) => rect && rect.id === "R5b")
+							: null;
+						const sliderTrackTop = coupledR5bItem
+							? item.top
+							: (potSliderBounds ? potSliderBounds.topLeadEnd : (y - sliderBodyHeight / 2 + 12));
+						const sliderTrackBottom = coupledR5bItem
+							? coupledR5bItem.bottom
+							: (potSliderBounds ? potSliderBounds.bottomResEnd : (y + sliderBodyHeight / 2 - 6));
+						this.drawCanvasSlider(item.id, isPotentiometer(item.id) ? potentiometerTapRatio(item.id) : resistorValue(item.id), {
 							trackX: x - 36,
-							trackTop: y - RES_H / 2 + 12,
-							trackBottom: y + RES_H / 2 - 6,
-							min: 0.1,
-							max: 10,
-							step: 0.1,
+							trackTop: sliderTrackTop,
+							trackBottom: sliderTrackBottom,
+							min: isPotentiometer(item.id) || isCoupledR5Controller(item.id) ? 0 : 0.1,
+							max: isPotentiometer(item.id) ? 1 : (isCoupledR5Controller(item.id) ? 6 : 10),
+							step: isPotentiometer(item.id) ? 0.01 : 0.1,
 							label: item.id,
 							showValueTop: true
 						});
@@ -6031,7 +7207,7 @@ export class CircuitApp {
 							this.drawDebugWireMeasurement(x, connectorStartY, item.top, "CONNECTOR_WIRE");
 						}
 						const sol = solved.byId && solved.byId[item.id];
-						this.drawResistorBody(item, state.drag && state.drag.id === item.id ? state.drag : null, sol);
+						this.drawResistorBody(item, getActiveDragForItem(item.id), sol);
 						if (sol && Number.isFinite(sol.Vbottom)) {
 							runV = sol.Vbottom;
 						}
@@ -6144,7 +7320,7 @@ export class CircuitApp {
 						const leftSol = state.solved && state.solved.byId[item.id];
 						const itemTopV = leftSol && Number.isFinite(leftSol.Vtop) ? leftSol.Vtop : leftBranchV;
 						this.drawWireSegment(x, leftBranchY, x, item.top, leftBranchV, itemTopV, item.top - leftBranchY > CONNECTOR_WIRE + 1 ? "END_BUS_CONNECTOR" : "CONNECTOR_WIRE");
-						this.drawResistorBody(item, state.drag && state.drag.id === item.id ? state.drag : null, leftSol);
+						this.drawResistorBody(item, getActiveDragForItem(item.id), leftSol);
 						if (leftSol && Number.isFinite(leftSol.Vbottom)) {
 							leftBranchV = leftSol.Vbottom;
 						}
@@ -6332,6 +7508,18 @@ export class CircuitApp {
 							for (let i = 0; i < bottomBusPoints.length - 1; i++) {
 								this.drawWireSegment(bottomBusPoints[i].x, stageExitBottom, bottomBusPoints[i + 1].x, stageExitBottom, bottomBusPoints[i].v, bottomBusPoints[i + 1].v, bottomBusLabel);
 							}
+							if (isPotentiometerPresetActive()) {
+								const leftX = Math.min(topBusPoints[0].x, topBusPoints[topBusPoints.length - 1].x);
+								const rightX = Math.max(topBusPoints[0].x, topBusPoints[topBusPoints.length - 1].x);
+								if (rightX - leftX > 8) {
+									const midX = (leftX + rightX) * 0.5;
+									const fallbackCurrent = Number.isFinite(state.solved?.Itotal) ? state.solved.Itotal : 0;
+									const topBusCurrent = this.horizontalBusCurrentFromTable(stageEntryTop, leftX, rightX);
+									const bottomBusCurrent = this.horizontalBusCurrentFromTable(stageExitBottom, leftX, rightX);
+									this.drawHorizontalBusArrow(midX, stageEntryTop, Number.isFinite(topBusCurrent) ? topBusCurrent : fallbackCurrent);
+									this.drawHorizontalBusArrow(midX, stageExitBottom, Number.isFinite(bottomBusCurrent) ? bottomBusCurrent : fallbackCurrent);
+								}
+							}
 						}
 						for (const branch of stage.branches) {
 							const branchX = branch.x;
@@ -6366,7 +7554,7 @@ export class CircuitApp {
 								if (sol && (item.top - branchY) > 8) {
 									this.drawCurrentArrow(branchX, branchY, item.top, sol.I * (sol.arrowAlignFactor ?? 1));
 								}
-								this.drawResistorBody(item, state.drag && state.drag.id === item.id ? state.drag : null, sol);
+								this.drawResistorBody(item, getActiveDragForItem(item.id), sol);
 								if (sol && Number.isFinite(sol.Vbottom)) {
 									branchV = sol.Vbottom;
 								}
@@ -7186,8 +8374,13 @@ export class CircuitApp {
 							? directedVoltageForPiece(fromKey, toKey, aKey, bKey, cached.signedPdValue)
 							: NaN;
 						const emfDirectedByRow = isCellEmfPiece
-							&& Number.isFinite(cached.signedPdValue)
-							? directedVoltageForPiece(fromKey, toKey, aKey, bKey, cached.signedPdValue)
+							? directedVoltageForPiece(
+								fromKey,
+								toKey,
+								aKey,
+								bKey,
+								Math.abs(Number.isFinite(componentEmf(piece.componentId)) ? componentEmf(piece.componentId) : 0)
+							)
 							: NaN;
 						const directedPdPlusEmf = Number.isFinite(emfDirectedByRow)
 							? emfDirectedByRow
@@ -7727,7 +8920,9 @@ export class CircuitApp {
 					ctx.fillText(msg, bx + boxW / 2, by + boxH / 2);
 					ctx.restore();
 				}
-				requestAnimationFrame(render);
+				if (!isPaused) {
+					requestAnimationFrame(render);
+				}
 			}
 
 			function resizeImpl() {
@@ -7838,56 +9033,103 @@ export class CircuitApp {
 				handleDrop(dropX, dropY) {
 					if (!state.drag) return;
 					const id = state.drag.id;
-						const wasPlacedBeforeDrop = componentIsPlaced(id);
+					const groupIds = draggedGroupIds();
+					const dragIds = groupIds.length ? groupIds : [id];
+					const isCoupledDrag = groupIds.length > 1 && groupIds.every((groupId) => isCoupledR5(groupId));
+					const wasPlacedBeforeDrop = dragIds.some((dragId) => componentIsPlaced(dragId));
 					const layout = state.layout;
-					// Use both cursor position AND dragged-component centre for hit detection
-					const dragCentreX = state.drag.x;
-					const dragCentreY = state.drag.y;
-					const leftDirectTarget = (layout.leftSeriesItems || []).find((item) => item.id !== id && (this.rectHit(item, dropX, dropY) || this.rectHit(item, dragCentreX, dragCentreY)));
-					if (leftDirectTarget) {
-						const hitY = this.rectHit(leftDirectTarget, dropX, dropY) ? dropY : dragCentreY;
-						const insertIndex = hitY < leftDirectTarget.y ? leftDirectTarget.leftSeriesIndex : (leftDirectTarget.leftSeriesIndex + 1);
+				const hasLockedComponents = state.lockedComponentIds.size > 0;
+				// Use both cursor position AND dragged-component centre for hit detection
+				const dragCentreX = state.drag.x;
+				const dragCentreY = state.drag.y;
+				const isDraggedId = (candidateId) => dragIds.includes(candidateId);
+				const leftDirectTarget = (layout.leftSeriesItems || []).find((item) => !isDraggedId(item.id) && (this.rectHit(item, dropX, dropY) || this.rectHit(item, dragCentreX, dragCentreY)));
+				if (leftDirectTarget) {
+					const hitY = this.rectHit(leftDirectTarget, dropX, dropY) ? dropY : dragCentreY;
+					const insertIndex = hitY < leftDirectTarget.y ? leftDirectTarget.leftSeriesIndex : (leftDirectTarget.leftSeriesIndex + 1);
+					if (dragIds.length > 1) {
+						insertGroupIntoLeftSeriesAt(dragIds, insertIndex);
+					} else {
 						insertIntoLeftSeriesAt(id, insertIndex);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
-						resetGraphZoomToFit();
-						return;
 					}
-					const leftSeriesZone = layout.leftSeriesInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
-					if (leftSeriesZone) {
+					if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
+					resetGraphZoomToFit();
+					return;
+				}
+				const leftSeriesZone = layout.leftSeriesInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
+				if (leftSeriesZone) {
+					if (dragIds.length > 1) {
+						insertGroupIntoLeftSeriesAt(dragIds, leftSeriesZone.insertIndex);
+					} else {
 						insertIntoLeftSeriesAt(id, leftSeriesZone.insertIndex);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
+					}
+					if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
+					resetGraphZoomToFit();
+					return;
+				}
+				const others = layout.rects.filter((r) => !isDraggedId(r.id));
+				if (isCoupledDrag) {
+					const rightDirectTarget = others.find((r) => !r.isLeftSeries && (this.rectHit(r, dropX, dropY) || this.rectHit(r, dragCentreX, dragCentreY)));
+					if (rightDirectTarget) {
+						const hitY = this.rectHit(rightDirectTarget, dropX, dropY) ? dropY : dragCentreY;
+						insertGroupIntoBranchByTarget(dragIds, rightDirectTarget.id, hitY < rightDirectTarget.y ? "before" : "after");
+						if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
 					}
-					const others = layout.rects.filter((r) => r.id !== id);
-					// Parallel: match if cursor OR dragged-component centre is over the target body
-					const parallelTarget = others.find((r) => !r.isLeftSeries && canAddParallelBranch(id, r.id) && (this.rectHit(r, dropX, dropY) || this.rectHit(r, dragCentreX, dragCentreY)));
+				}
+				// Parallel: match if cursor OR dragged-component centre is over the target body
+				const parallelTarget = !isCoupledDrag && !hasLockedComponents
+					? others.find((r) => !r.isLeftSeries && canAddParallelBranch(id, r.id) && (this.rectHit(r, dropX, dropY) || this.rectHit(r, dragCentreX, dragCentreY)))
+					: null;
 
-					if (parallelTarget) {
-						if (addResistorInParallel(id, parallelTarget.id)) {
-								if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
-							resetGraphZoomToFit();
-							return;
-						}
-					}
+				const redirectedSpecialTarget = !isCoupledDrag
+					? others.find((r) => {
+						if (r.isLeftSeries) return false;
+						if (!potentiometerSpecialSwitchForR5(r.id)) return false;
+						return this.rectHit(r, dropX, dropY) || this.rectHit(r, dragCentreX, dragCentreY);
+					})
+					: null;
+				if (redirectedSpecialTarget) {
+					insertIntoBranchByTarget(id, redirectedSpecialTarget.id, "after");
+					if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
+					resetGraphZoomToFit();
+					return;
+				}
 
-					const branchZone = layout.wireZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
-					if (branchZone) {
-						insertIntoBranchByTarget(id, branchZone.targetId, branchZone.mode);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
+				if (parallelTarget) {
+					if (addResistorInParallel(id, parallelTarget.id)) {
+						if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
 						resetGraphZoomToFit();
 						return;
-					}
-
-					const seriesZone = layout.stageInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
-					if (seriesZone) {
-						insertAsSeriesAt(id, seriesZone.insertIndex);
-							if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
-						resetGraphZoomToFit();
 					}
 				}
 
-				onPointerDown(evt) {
+				const branchZone = layout.wireZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY));
+				if (branchZone) {
+					if (dragIds.length > 1) {
+						insertGroupIntoBranchByTarget(dragIds, branchZone.targetId, branchZone.mode);
+					} else {
+						insertIntoBranchByTarget(id, branchZone.targetId, branchZone.mode);
+					}
+					if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
+					resetGraphZoomToFit();
+					return;
+				}
+
+				const seriesZone = !hasLockedComponents ? layout.stageInsertZones.find((zone) => this.rectHit(zone, dropX, dropY) || this.rectHit(zone, dragCentreX, dragCentreY)) : null;
+				if (seriesZone) {
+					if (dragIds.length > 1) {
+						insertGroupAsSeriesAt(dragIds, seriesZone.insertIndex);
+					} else {
+						insertAsSeriesAt(id, seriesZone.insertIndex);
+					}
+					if (!wasPlacedBeforeDrop) autoFitCircuitViewToCanvas();
+					resetGraphZoomToFit();
+				}
+	}
+
+	onPointerDown(evt) {
 					const pos = this.pointerPos(evt);
 					const raw = this.pointerRawPos(evt);
 					const overGraphSurface = this.isOverGraphSurface(evt);
@@ -7914,10 +9156,15 @@ export class CircuitApp {
 						evt.preventDefault();
 						return;
 					}
-					const hitSlider = sliderHitAreas.find((s) => Math.hypot(pos.x - s.trackX, pos.y - s.sphereY) < 10);
+					const hitSlider = sliderHitAreas.reduce((best, s) => {
+						const d = Math.hypot(pos.x - s.trackX, pos.y - s.sphereY);
+						if (d >= 10) return best;
+						if (!best || d < best.dist) return { slider: s, dist: d };
+						return best;
+					}, null);
 					if (hitSlider) {
 						sliderDragState.active = true;
-						sliderDragState.paramKey = hitSlider.paramKey;
+						sliderDragState.paramKey = hitSlider.slider.paramKey;
 						canvas.style.cursor = "grabbing";
 						evt.preventDefault();
 						return;
@@ -7986,17 +9233,38 @@ export class CircuitApp {
 						}
 						return;
 					}
+					if (state.lockedComponentIds.has(hit.id)) {
+						// Locked components cannot be dragged
+						return;
+					}
 					state.drag = {
 						id: hit.id,
 						x: hit.x,
 						y: hit.y,
 						offsetX: pos.x - hit.x,
 						offsetY: pos.y - hit.y,
+						groupIds: [],
+						groupOrderedIds: [],
+						groupOffsetsById: null,
 						isSwitchTapCandidate: false,
 						tapStartX: pos.x,
 						tapStartY: pos.y,
 						tapThreshold: SWITCH_TAP_DRAG_THRESHOLD
 					};
+					if (isCoupledR5(hit.id) && state.layout && Array.isArray(state.layout.rects)) {
+						const coupledRects = state.layout.rects
+							.filter((rect) => isCoupledR5(rect.id))
+							.sort((a, b) => a.y - b.y);
+						if (coupledRects.length > 1) {
+							const offsets = {};
+							for (const rect of coupledRects) {
+								offsets[rect.id] = { x: rect.x - hit.x, y: rect.y - hit.y };
+							}
+							state.drag.groupIds = coupledRects.map((rect) => rect.id);
+							state.drag.groupOrderedIds = coupledRects.map((rect) => rect.id);
+							state.drag.groupOffsetsById = offsets;
+						}
+					}
 					canvas.setPointerCapture(evt.pointerId);
 					canvas.style.cursor = "grabbing";
 				}
@@ -8062,9 +9330,12 @@ export class CircuitApp {
 						const s = sliderHitAreas.find((item) => item.paramKey === sliderDragState.paramKey);
 						if (!s) return;
 						const t = clamp((pos.y - s.trackTop) / (s.trackBottom - s.trackTop), 0, 1);
-						const rawValue = s.max - t * (s.max - s.min);
+						const isTopToBottomIncreasing = s.paramKey === "P1" || isCoupledR5Controller(s.paramKey);
+						const rawValue = isTopToBottomIncreasing
+							? (s.min + t * (s.max - s.min))
+							: (s.max - t * (s.max - s.min));
 						const snapped = Math.round(rawValue / s.step) * s.step;
-						const decimals = s.step < 1 ? 1 : 0;
+						const decimals = s.paramKey === "P1" ? 2 : (s.step < 1 ? 1 : 0);
 						const value = Number(clamp(snapped, s.min, s.max).toFixed(decimals));
 						const cellEmfId = cellIdFromSliderKey(s.paramKey, CELL_EMF_SLIDER_KEYS);
 						const cellRInternalId = cellIdFromSliderKey(s.paramKey, CELL_R_INTERNAL_KEYS);
@@ -8073,10 +9344,20 @@ export class CircuitApp {
 						} else if (cellRInternalId) {
 							state.cellRInternalById[cellRInternalId] = value;
 						} else {
-							state.resistorValues[s.paramKey] = value;
-							syncResistorValueInput(s.paramKey);
+							if (isCoupledR5Controller(s.paramKey)) {
+								setCoupledR5aValue(value);
+								syncResistorValueInput("R5a");
+								syncResistorValueInput("R5b");
+							} else {
+								state.resistorValues[s.paramKey] = value;
+								syncResistorValueInput(s.paramKey);
+							}
 						}
-						solveCircuit();
+						if (isCoupledR5Controller(s.paramKey) && isPotentiometerPresetActive()) {
+							rebuildLayout();
+						} else {
+							solveCircuit();
+						}
 						if (state.potentialGraphMode) {
 							const fit = computeAutoFitGraphView();
 							state.graphZoom = fit.zoom;
@@ -8308,27 +9589,66 @@ export class CircuitApp {
 				}
 
 				bindUiEvents() {
+					if (rValueInputs.R5a) {
+						rValueInputs.R5a.min = "0.0";
+						rValueInputs.R5a.max = "6.0";
+						rValueInputs.R5a.step = "0.1";
+					}
+					if (rValueInputs.R5b) {
+						rValueInputs.R5b.min = "0.0";
+						rValueInputs.R5b.max = "6.0";
+						rValueInputs.R5b.step = "0.1";
+						rValueInputs.R5b.readOnly = true;
+						rValueInputs.R5b.setAttribute("aria-readonly", "true");
+					}
+					const handledResistorToggleIds = new Set();
 					resistorDefs.forEach((r) => {
-						ui[r.id].addEventListener("input", () => {
-							if (ui[r.id].checked) {
-								if (!componentIsPlaced(r.id)) {
-									state.stages.push({ branches: [[r.id]] });
+						const toggleId = resistorToggleElementId(r.id);
+						if (!handledResistorToggleIds.has(toggleId)) {
+							handledResistorToggleIds.add(toggleId);
+							ui[r.id].addEventListener("input", () => {
+								const groupIds = resistorToggleGroupIds(r.id);
+								if (isResistorEnabled(r.id)) {
+									for (const id of groupIds) {
+										if (!componentIsPlaced(id)) {
+											state.stages.push({ branches: [[id]] });
+										}
+									}
+								} else {
+									for (const id of groupIds) {
+										removeResistorFromStages(id);
+										removeFromLeftSeries(id);
+									}
 								}
-							} else {
-								removeResistorFromStages(r.id);
-								removeFromLeftSeries(r.id);
-							}
-							autoFitCircuitViewToCanvas();
-							resetGraphZoomToFit();
-						});
+								autoFitCircuitViewToCanvas();
+								resetGraphZoomToFit();
+							});
+						}
 
+						if (!rValueInputs[r.id]) return;
 						rValueInputs[r.id].addEventListener("input", () => {
+							if (r.id === "R5b") {
+								syncResistorValueInput("R5b");
+								return;
+							}
 							const raw = Number(rValueInputs[r.id].value);
 							if (!Number.isFinite(raw)) return;
-							const val = Number(clamp(raw, 0.1, 10).toFixed(1));
-							state.resistorValues[r.id] = val;
+							const minVal = isPotentiometer(r.id) || isCoupledR5Controller(r.id) ? 0 : 0.1;
+							const maxVal = isPotentiometer(r.id) ? POTENTIOMETER_TOTAL_RESISTANCE : (isCoupledR5Controller(r.id) ? 6 : 10);
+							const val = Number(clamp(raw, minVal, maxVal).toFixed(1));
+							if (isPotentiometer(r.id)) {
+								state.resistorValues[r.id] = Number((val / POTENTIOMETER_TOTAL_RESISTANCE).toFixed(4));
+							} else if (isCoupledR5Controller(r.id)) {
+								setCoupledR5aValue(val);
+								syncResistorValueInput("R5b");
+							} else {
+								state.resistorValues[r.id] = val;
+							}
 							rValueInputs[r.id].value = val.toFixed(1);
 							solveCircuit();
+							if (isCoupledR5Controller(r.id) && isPotentiometerPresetActive()) {
+								rebuildLayout();
+							}
 							if (state.potentialGraphMode) {
 								const fit = computeAutoFitGraphView();
 								state.graphZoom = fit.zoom;
@@ -8338,11 +9658,30 @@ export class CircuitApp {
 						});
 
 						rValueInputs[r.id].addEventListener("change", () => {
+							if (r.id === "R5b") {
+								syncResistorValueInput("R5b");
+								return;
+							}
 							const raw = Number(rValueInputs[r.id].value);
-							const val = Number.isFinite(raw) ? Number(clamp(raw, 0.1, 10).toFixed(1)) : (state.resistorValues[r.id] || 2.5);
-							state.resistorValues[r.id] = val;
+							const minVal = isPotentiometer(r.id) || isCoupledR5Controller(r.id) ? 0 : 0.1;
+							const maxVal = isPotentiometer(r.id) ? POTENTIOMETER_TOTAL_RESISTANCE : (isCoupledR5Controller(r.id) ? 6 : 10);
+							const fallback = isPotentiometer(r.id)
+								? potentiometerUpperResistance(r.id)
+								: (isCoupledR5Controller(r.id) ? resistorValue(r.id) : (state.resistorValues[r.id] || 2.5));
+							const val = Number.isFinite(raw) ? Number(clamp(raw, minVal, maxVal).toFixed(1)) : fallback;
+							if (isPotentiometer(r.id)) {
+								state.resistorValues[r.id] = Number((val / POTENTIOMETER_TOTAL_RESISTANCE).toFixed(4));
+							} else if (isCoupledR5Controller(r.id)) {
+								setCoupledR5aValue(val);
+								syncResistorValueInput("R5b");
+							} else {
+								state.resistorValues[r.id] = val;
+							}
 							rValueInputs[r.id].value = val.toFixed(1);
 							solveCircuit();
+							if (isCoupledR5Controller(r.id) && isPotentiometerPresetActive()) {
+								rebuildLayout();
+							}
 							if (state.potentialGraphMode) {
 								const fit = computeAutoFitGraphView();
 								state.graphZoom = fit.zoom;
@@ -8356,6 +9695,11 @@ export class CircuitApp {
 						const check = switchChecks[id];
 						if (!check) continue;
 						check.addEventListener("input", () => {
+							if (isPotentiometerPresetActive() && isPotentiometerSpecialSwitch(id)) {
+								check.checked = true;
+								enforcePotentiometerSpecialSwitchRules();
+								return;
+							}
 							if (check.checked) {
 								if (!componentIsPlaced(id)) {
 									state.stages.push({ branches: [[id]] });
@@ -8471,15 +9815,144 @@ export class CircuitApp {
 			componentMenuToggle.addEventListener("click", () => setComponentMenuOpen(true));
 			componentMenuClose.addEventListener("click", () => setComponentMenuOpen(false));
 
+			if (playPauseBtn) {
+				playPauseBtn.addEventListener("click", () => {
+					isPaused = !isPaused;
+					playPauseBtn.textContent = isPaused ? "Play" : "Pause";
+					if (!isPaused) {
+						requestAnimationFrame(render);
+					}
+				});
+			}
+
+			if (resetBtn) {
+				resetBtn.addEventListener("click", () => {
+					applyDefaultConfiguration();
+				});
+			}
+
+			if (saveConfigBtn) {
+				saveConfigBtn.addEventListener("click", () => {
+					const presetName = window.prompt("Your file will be in your downloads folder\n\nEnter a name for this preset:");
+					if (!presetName || !presetName.trim()) {
+						window.alert("Preset name is required.");
+						return;
+					}
+					const cleanName = presetName.trim();
+					const config = buildSerializableConfig(cleanName);
+					const jsonString = JSON.stringify(config, null, 2);
+					const blob = new Blob([jsonString], { type: "application/json" });
+					const url = URL.createObjectURL(blob);
+					const a = document.createElement("a");
+					a.href = url;
+					a.download = `PRESET - ${cleanName}.json`;
+					document.body.appendChild(a);
+					a.click();
+					document.body.removeChild(a);
+					URL.revokeObjectURL(url);
+					window.alert(`Preset "${cleanName}" saved!\nFile: PRESET - ${cleanName}.json`);
+				});
+			}
+
+			if (loadConfigBtn && loadConfigInput) {
+				loadConfigBtn.addEventListener("click", () => {
+					loadConfigInput.click();
+				});
+
+				loadConfigInput.addEventListener("change", (event) => {
+					const file = event.target.files && event.target.files[0];
+					if (!file) return;
+					const reader = new FileReader();
+					reader.onload = () => {
+						try {
+							const loaded = JSON.parse(reader.result);
+							if (!loaded || loaded.type !== "current-and-voltage") {
+								window.alert("Invalid preset file.");
+								return;
+							}
+							state.currentPreset = null;
+							state.lockedComponentIds = new Set();
+							applyLoadedConfig(loaded);
+							if (presetSelect) presetSelect.value = "default";
+						} catch (error) {
+							window.alert("Failed to load preset JSON.");
+						} finally {
+							loadConfigInput.value = "";
+						}
+					};
+					reader.readAsText(file);
+				});
+			}
+
+			const potentiometerPreset = {
+				type: "current-and-voltage",
+				version: 1,
+				name: "Potentiometer",
+				componentValues: {
+					resistorValues: { R1: 2.5, R2: 5, R3: 7.5, R4: 10, R5a: 5, R5b: 1, P1: 3 },
+					cellEmfById: { Cell1: 6, Cell2: 6, Cell3: 6, Cell4: 6 },
+					cellPolarityById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
+					cellRInternalById: { Cell1: 1, Cell2: 1, Cell3: 1, Cell4: 1 },
+					switchClosedById: { MAIN_SWITCH: true, S1: true, S2: true, S3: true, S4: true, S5: false, S6: false }
+				},
+				componentEnabled: {
+					resistors: { R1: false, R2: false, R3: false, R4: false, R5a: true, R5b: true, P1: false },
+					cells: { Cell1: true, Cell2: false, Cell3: false, Cell4: false },
+					switches: { S1: false, S2: false, S3: false, S4: false, S5: true, S6: true },
+					internalResistance: false
+				},
+				layout: {
+					leftSeries: ["Cell1"],
+					stages: [
+						{ branches: [["R5a"], ["S5"]] },
+						{ branches: [["R5b"], ["S6"]] }
+					],
+					sortKeys: {}
+				},
+				display: {
+					voltageColorMode: false,
+					potentialGraphMode: false,
+					invertVoltageAxis: true,
+					debugMode: false,
+					debugLabels: false,
+					debugJunctionIds: false,
+					debugNodePotentials: false,
+					wireResistanceLabels: false,
+					nodesIRLabels: false
+				},
+				lockedComponents: ["R5a", "R5b", "S5", "S6"]
+			};
+
+			function applyPreset(preset) {
+				state.currentPreset = preset.name || null;
+				state.lockedComponentIds = new Set(preset.lockedComponents || []);
+				applyLoadedConfig(preset);
+				updatePotentiometerSpecialSwitchControlVisibility();
+			}
+
+			if (presetSelect) {
+				presetSelect.addEventListener("change", () => {
+					if (presetSelect.value === "default") {
+						state.currentPreset = null;
+						state.lockedComponentIds = new Set();
+						updatePotentiometerSpecialSwitchControlVisibility();
+						applyDefaultConfiguration();
+					} else if (presetSelect.value === "potentiometer") {
+						applyPreset(potentiometerPreset);
+					}
+				});
+			}
+
 			window.addEventListener("resize", resize);
 			new ResizeObserver(resize).observe(topbar);
 			new ResizeObserver(resize).observe(app);
 			inputController.updatePotentialGraphVisibility();
 			resistorDefs.forEach((r) => syncResistorValueInput(r.id));
+			updatePotentiometerSpecialSwitchControlVisibility();
 			resetStagesFromEnabled();
 			resize();
+			if (playPauseBtn) playPauseBtn.textContent = "Pause";
 			requestAnimationFrame(render);
 		}
 	}
 
-	new CircuitApp();
