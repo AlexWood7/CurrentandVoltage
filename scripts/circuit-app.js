@@ -8379,7 +8379,7 @@ export class CircuitApp {
 								toKey,
 								aKey,
 								bKey,
-								Math.abs(Number.isFinite(componentEmf(piece.componentId)) ? componentEmf(piece.componentId) : 0)
+								-(Number.isFinite(componentEmf(piece.componentId)) ? componentEmf(piece.componentId) : 0)
 							)
 							: NaN;
 						const directedPdPlusEmf = Number.isFinite(emfDirectedByRow)
