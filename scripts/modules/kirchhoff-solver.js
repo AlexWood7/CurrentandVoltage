@@ -1,5 +1,3 @@
-import { solveLinearSystem } from "./linear-system.js";
-
 export function createKirchhoffSolver(deps) {
 	const {
 		state,
@@ -30,122 +28,53 @@ export function createKirchhoffSolver(deps) {
 			}))
 			: [];
 		if (!graphRouteRows.length) {
+			const allSegs = buildCircuitVoltageSegments(layout);
 			const loopParts = [];
 			let totalR = 0;
 			let totalE = 0;
 			const seenComp = new Set();
-			const seenSwitchBlade = new Set();
-
-			const routeGraphEdges = routeGraphForSections && Array.isArray(routeGraphForSections.edges)
-				? routeGraphForSections.edges
-				: [];
-			const routeGraphAdjacency = routeGraphForSections && routeGraphForSections.adjacency
-				? routeGraphForSections.adjacency
-				: null;
-			const routeGraphNodes = routeGraphForSections && routeGraphForSections.nodeByKey
-				? routeGraphForSections.nodeByKey
-				: null;
-			const routeGraphSegments = routeGraphForSections && Array.isArray(routeGraphForSections.segments)
-				? routeGraphForSections.segments
-				: [];
-
-			const buildCycleTraversal = () => {
-				if (!routeGraphEdges.length || !routeGraphAdjacency) return null;
-				const attempt = (startEdgeIndex, startFromKey) => {
-					const startEdge = routeGraphEdges[startEdgeIndex];
-					if (!startEdge) return null;
-					const startToKey = startEdge.nodeA === startFromKey ? startEdge.nodeB : startEdge.nodeA;
-					if (!startToKey) return null;
-					const used = new Set([startEdgeIndex]);
-					const steps = [{ edgeIndex: startEdgeIndex, fromKey: startFromKey, toKey: startToKey }];
-					let currentKey = startToKey;
-					let prevEdgeIndex = startEdgeIndex;
-					for (let guard = 0; guard < routeGraphEdges.length + 4; guard++) {
-						if (currentKey === startFromKey) break;
-						const incident = routeGraphAdjacency.get(currentKey) || [];
-						const nextCandidates = incident.filter((ei) => ei !== prevEdgeIndex && !used.has(ei));
-						if (!nextCandidates.length) return null;
-						const nextEdgeIndex = nextCandidates[0];
-						const nextEdge = routeGraphEdges[nextEdgeIndex];
-						if (!nextEdge) return null;
-						const nextKey = nextEdge.nodeA === currentKey ? nextEdge.nodeB : nextEdge.nodeA;
-						if (!nextKey) return null;
-						used.add(nextEdgeIndex);
-						steps.push({ edgeIndex: nextEdgeIndex, fromKey: currentKey, toKey: nextKey });
-						prevEdgeIndex = nextEdgeIndex;
-						currentKey = nextKey;
-					}
-					if (currentKey !== startFromKey) return null;
-					return steps;
-				};
-
-				for (let edgeIndex = 0; edgeIndex < routeGraphEdges.length; edgeIndex++) {
-					const edge = routeGraphEdges[edgeIndex];
-					if (!edge) continue;
-					const forward = attempt(edgeIndex, edge.nodeA);
-					if (forward && forward.length) return forward;
-					const reverse = attempt(edgeIndex, edge.nodeB);
-					if (reverse && reverse.length) return reverse;
-				}
-				return null;
-			};
-
-			const traversalSteps = buildCycleTraversal();
-			const hasCycleTraversal = Array.isArray(traversalSteps) && traversalSteps.length > 0;
-			if (hasCycleTraversal) {
-				for (const step of traversalSteps) {
-					const edge = routeGraphEdges[step.edgeIndex];
-					if (!edge) continue;
-					const fromNode = routeGraphNodes && routeGraphNodes.get(step.fromKey);
-					const toNode = routeGraphNodes && routeGraphNodes.get(step.toKey);
-					if (!fromNode || !toNode) continue;
-					const travDx = toNode.x - fromNode.x;
-					const travDy = toNode.y - fromNode.y;
-					loopParts.push({
-						x1: fromNode.x,
-						y1: fromNode.y,
-						x2: toNode.x,
-						y2: toNode.y,
-						travDx,
-						travDy
-					});
-				}
-			}
-			for (const edge of routeGraphEdges) {
-				const srcSeg = routeGraphSegments[edge.sourceSegmentIndex] || null;
-				if (srcSeg && srcSeg.componentId && srcSeg.role === "component-main") {
-					if (seenComp.has(srcSeg.componentId)) continue;
-					seenComp.add(srcSeg.componentId);
-					const componentId = srcSeg.componentId;
+			for (const seg of allSegs) {
+				if (!seg) continue;
+				if (!Number.isFinite(seg.x1) || !Number.isFinite(seg.y1) || !Number.isFinite(seg.x2) || !Number.isFinite(seg.y2)) continue;
+				loopParts.push({
+					x1: seg.x1,
+					y1: seg.y1,
+					x2: seg.x2,
+					y2: seg.y2,
+					travDx: seg.x2 - seg.x1,
+					travDy: seg.y2 - seg.y1
+				});
+				if (seg.componentId && seg.role === "component-main") {
+					if (seenComp.has(seg.componentId)) continue;
+					seenComp.add(seg.componentId);
+					const componentId = seg.componentId;
 					const componentR = isBranchSwitch(componentId)
 						? componentIntrinsicResistance(componentId)
 						: componentResistance(componentId);
 					totalR += Math.max(0, componentR);
 					const riseEmf = Number.isFinite(componentEmf(componentId)) ? (-componentEmf(componentId)) : 0;
 					if (Math.abs(riseEmf) > 1e-12) {
-						const travDx = edge.x2 - edge.x1;
-						const travDy = edge.y2 - edge.y1;
-						const segDx = srcSeg.x2 - srcSeg.x1;
-						const segDy = srcSeg.y2 - srcSeg.y1;
-						const dot = travDx * segDx + travDy * segDy;
-						const traversalSign = dot >= 0 ? 1 : -1;
-						totalE += riseEmf * traversalSign;
+						const segTraversalSign = Math.abs(seg.y2 - seg.y1) >= Math.abs(seg.x2 - seg.x1)
+							? (seg.y2 >= seg.y1 ? 1 : -1)
+							: (seg.x2 >= seg.x1 ? 1 : -1);
+						totalE += riseEmf * segTraversalSign;
 					}
 					continue;
 				}
-
-				if (srcSeg && srcSeg.componentId && srcSeg.role === "switch-blade") {
-					if (seenSwitchBlade.has(srcSeg.componentId)) continue;
-					seenSwitchBlade.add(srcSeg.componentId);
-					if (isComponentSwitchClosed(srcSeg.componentId)) {
-						const bladeLen = Math.hypot(srcSeg.x2 - srcSeg.x1, srcSeg.y2 - srcSeg.y1);
-						totalR += Math.max(0, bladeLen * SHORT_WIRE_R_PER_PIXEL);
-					} else {
-						totalR += Math.max(0, componentIntrinsicResistance(srcSeg.componentId));
-					}
+				if (seg.componentId && seg.role === "switch-blade" && isComponentSwitchClosed(seg.componentId)) {
+					const bladeLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+					totalR += Math.max(0, bladeLen * SHORT_WIRE_R_PER_PIXEL);
 					continue;
 				}
-
+			}
+			const routeGraphEdges = routeGraphForSections && Array.isArray(routeGraphForSections.edges)
+				? routeGraphForSections.edges
+				: [];
+			for (const edge of routeGraphEdges) {
+				const srcSeg = routeGraphForSections && Array.isArray(routeGraphForSections.segments)
+					? routeGraphForSections.segments[edge.sourceSegmentIndex]
+					: null;
+				if (srcSeg && (srcSeg.role === "component-main" || srcSeg.role === "switch-blade") && srcSeg.componentId) continue;
 				const baseLen = Math.hypot(edge.x2 - edge.x1, edge.y2 - edge.y1);
 				if (!(baseLen > 0)) continue;
 				const nodeA = routeGraphForSections.nodeByKey && routeGraphForSections.nodeByKey.get(edge.nodeA);
@@ -177,6 +106,13 @@ export function createKirchhoffSolver(deps) {
 				totalR += Math.max(0, (baseLen - trim) * SHORT_WIRE_R_PER_PIXEL);
 			}
 			const loopR = Math.max(1e-12, totalR);
+			const solvedLoopI = state.solved && Number.isFinite(state.solved.Itotal) ? state.solved.Itotal : NaN;
+			// Single-loop fallback has no robust junction orientation information. If we already have
+			// a matrix-solved loop current, derive fallback E from I*R to keep diagnostic rows physically
+			// consistent instead of relying on geometry-only EMF sign inference.
+			if (Number.isFinite(solvedLoopI) && loopR > 1e-12) {
+				totalE = solvedLoopI * loopR;
+			}
 			graphRouteRows = [{
 				from: "J1",
 				to: "J1",
@@ -186,8 +122,7 @@ export function createKirchhoffSolver(deps) {
 				routeKey: "J1|J1",
 				routeIndex: 0,
 				isGraphRoute: true,
-				isSeriesFallback: true,
-				noCycleTraversal: !hasCycleTraversal
+				isSeriesFallback: true
 			}];
 		}
 
@@ -225,11 +160,23 @@ export function createKirchhoffSolver(deps) {
 				if (fi >= 0) bVec[fi] -= G * E;
 				if (ti >= 0) bVec[ti] += G * E;
 			}
-			const solvedNodeV = solveLinearSystem(YMat, bVec);
-			if (!Array.isArray(solvedNodeV) || solvedNodeV.length !== N) return null;
+			const aug = YMat.map((row, i) => [...row, bVec[i]]);
+			for (let col = 0; col < N; col++) {
+				let maxRow = col;
+				for (let r = col + 1; r < N; r++) {
+					if (Math.abs(aug[r][col]) > Math.abs(aug[maxRow][col])) maxRow = r;
+				}
+				[aug[col], aug[maxRow]] = [aug[maxRow], aug[col]];
+				if (Math.abs(aug[col][col]) < 1e-15) continue;
+				for (let r = 0; r < N; r++) {
+					if (r === col) continue;
+					const f = aug[r][col] / aug[col][col];
+					for (let c = col; c <= N; c++) aug[r][c] -= f * aug[col][c];
+				}
+			}
 			const nodeV = new Map([[groundNode, 0]]);
 			for (let i = 0; i < N; i++) {
-				nodeV.set(nodeList[i], Number.isFinite(solvedNodeV[i]) ? solvedNodeV[i] : 0);
+				nodeV.set(nodeList[i], Math.abs(aug[i][i]) > 1e-15 ? aug[i][N] / aug[i][i] : 0);
 			}
 			const branchResults = rows.map((r) => {
 				const Vf = nodeV.has(r.from) ? nodeV.get(r.from) : 0;
@@ -245,21 +192,18 @@ export function createKirchhoffSolver(deps) {
 		};
 
 		const sectionRows = graphRouteRows;
-		let networkSolution = null;
-		if (sectionRows.length === 1 && sectionRows[0].isSeriesFallback === true) {
+		const hasSeriesFallback = sectionRows.length === 1 && sectionRows[0] && sectionRows[0].isSeriesFallback === true;
+		let networkSolution = solveJunctionNetwork(sectionRows);
+		if (!networkSolution && sectionRows.length === 1 && sectionRows[0].isSeriesFallback === true) {
 			const row = sectionRows[0];
-			// If no complete cycle traversal exists, rely on the main matrix current so open-switch
-			// behavior stays consistent with the large-resistance model used by the core solver.
-			// Otherwise, keep E/R so Kirchhoff table columns remain self-consistent.
-			const I = row.noCycleTraversal
-				? (Number.isFinite(state.solved.Itotal) ? state.solved.Itotal : 0)
+			const solvedLoopI = state.solved && Number.isFinite(state.solved.Itotal) ? state.solved.Itotal : NaN;
+			const I = Number.isFinite(solvedLoopI)
+				? solvedLoopI
 				: (row.R > 1e-12 ? (row.E / row.R) : 0);
 			networkSolution = {
 				nodeV: new Map([["J1", 0]]),
-				branchResults: [{ I, Vr: I * row.R, netPd: 0 }]
+				branchResults: [{ I, Vr: -I * row.R, netPd: 0 }]
 			};
-		} else {
-			networkSolution = solveJunctionNetwork(sectionRows);
 		}
 		if (!networkSolution) {
 			state.solved.kirchhoffSectionData = null;
@@ -290,7 +234,7 @@ export function createKirchhoffSolver(deps) {
 		};
 
 		const emfIdx = sectionRows.findIndex((r) => Math.abs(Number.isFinite(r.E) ? r.E : 0) > 1e-6);
-		if (emfIdx >= 0) {
+		if (!hasSeriesFallback && emfIdx >= 0) {
 			const bRes = networkSolution.branchResults[emfIdx];
 			if (bRes && Number.isFinite(bRes.I)) {
 				state.solved.Itotal = bRes.I;
@@ -320,6 +264,7 @@ export function createKirchhoffSolver(deps) {
 			};
 			for (let ri = 0; ri < sectionRows.length; ri++) {
 				const row = sectionRows[ri];
+				if (row && row.isSeriesFallback) continue;
 				const bRes = networkSolution.branchResults[ri];
 				if (!bRes || !Number.isFinite(bRes.I)) continue;
 				const sectionI = bRes.I;

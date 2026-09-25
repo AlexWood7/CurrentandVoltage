@@ -2249,10 +2249,16 @@ export class CircuitApp {
 										? componentIntrinsicResistance(componentId)
 										: componentResistance(componentId));
 								routeR += Math.max(0, componentR);
-								// componentEmf uses solver drop-convention; section table E uses rise-convention.
-								const emf = Number.isFinite(componentEmf(srcSeg.componentId)) ? (-componentEmf(srcSeg.componentId)) : 0;
-								if (Math.abs(emf) > 1e-12) {
-									routeE += emf * edgeTraversalSign(edge, step.fromNodeKey, step.toNodeKey);
+								// Determine each source contribution from the actual cell polarity relative to the
+								// chosen loop traversal, rather than from a generic edge-direction heuristic.
+								const sourceEmf = Number.isFinite(componentEmf(srcSeg.componentId)) ? componentEmf(srcSeg.componentId) : 0;
+								if (Math.abs(sourceEmf) > 1e-12) {
+									const sourceDx = (Number.isFinite(srcSeg.x2) ? srcSeg.x2 : 0) - (Number.isFinite(srcSeg.x1) ? srcSeg.x1 : 0);
+									const sourceDy = (Number.isFinite(srcSeg.y2) ? srcSeg.y2 : 0) - (Number.isFinite(srcSeg.y1) ? srcSeg.y1 : 0);
+									const routeDx = (Number.isFinite(toNode.x) ? toNode.x : 0) - (Number.isFinite(fromNode.x) ? fromNode.x : 0);
+									const routeDy = (Number.isFinite(toNode.y) ? toNode.y : 0) - (Number.isFinite(fromNode.y) ? fromNode.y : 0);
+									const sourceTraversalSign = (sourceDx * routeDx + sourceDy * routeDy) >= 0 ? 1 : -1;
+									routeE += (-sourceEmf) * sourceTraversalSign;
 								}
 							}
 						} else {
